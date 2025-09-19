@@ -20,11 +20,36 @@ logging.basicConfig(
 sys.path.insert(0, 'custom_components/waterscope')
 
 try:
-    from http_auth import WaterscopeHTTPAuthenticator, authenticate_and_get_cookies
+    from waterscope import WaterscopeAPI, authenticate_and_get_cookies
 except ImportError as e:
     print(f"❌ Import error: {e}")
-    print("Make sure you're running this from the correct directory with the waterscope components available.")
-    sys.exit(1)
+    print("Attempting to handle missing const dependencies...")
+    
+    # Define fallback exception classes to allow testing
+    class WaterscopeError(Exception):
+        """Base exception for Waterscope errors."""
+        pass
+
+    class WaterscopeAPIError(WaterscopeError):
+        """Exception for API-related errors."""
+        pass
+
+    class WaterscopeAuthError(WaterscopeError):
+        """Exception for authentication-related errors."""
+        pass
+    
+    # Inject the exception classes into the waterscope module namespace
+    try:
+        import waterscope
+        waterscope.WaterscopeError = WaterscopeError
+        waterscope.WaterscopeAPIError = WaterscopeAPIError
+        waterscope.WaterscopeAuthError = WaterscopeAuthError
+        from waterscope import WaterscopeAPI, authenticate_and_get_cookies
+        print("✅ Successfully imported with fallback exception classes")
+    except ImportError as e2:
+        print(f"❌ Final import error: {e2}")
+        print("Make sure you're running this from the correct directory with the waterscope components available.")
+        sys.exit(1)
 
 class StandaloneAuthTest:
     """Standalone test for HTTP authentication functionality."""
@@ -60,7 +85,7 @@ class StandaloneAuthTest:
         print("-" * 40)
         
         try:
-            async with WaterscopeHTTPAuthenticator() as auth:
+            async with WaterscopeAPI() as auth:
                 result = await auth.authenticate(self.username, self.password)
                 
                 if result:
@@ -81,7 +106,7 @@ class StandaloneAuthTest:
         print("-" * 40)
         
         try:
-            async with WaterscopeHTTPAuthenticator() as auth:
+            async with WaterscopeAPI() as auth:
                 if await auth.authenticate(self.username, self.password):
                     # Test cookie dictionary
                     cookies_dict = auth.get_session_cookies()
@@ -144,7 +169,7 @@ class StandaloneAuthTest:
         
         try:
             # Test with invalid username
-            async with WaterscopeHTTPAuthenticator() as auth:
+            async with WaterscopeAPI() as auth:
                 result = await auth.authenticate("invalid@email.com", "wrongpassword")
                 
                 if not result:

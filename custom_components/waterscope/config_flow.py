@@ -1,4 +1,4 @@
-"""Config flow for Waterscope integration."""
+"""Streamlined configuration flow for Waterscope integration."""
 import logging
 from typing import Any, Dict, Optional
 
@@ -8,10 +8,12 @@ from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
 from homeassistant.core import callback
 import homeassistant.helpers.config_validation as cv
 
-from .http_api import WaterscopeHTTPAPI, WaterscopeHTTPAPIError, WaterscopeAuthError
 from .const import (
     DOMAIN,
-    DEFAULT_NAME
+    DEFAULT_NAME,
+    WaterscopeError,
+    WaterscopeAPIError,
+    WaterscopeAuthError
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,51 +36,45 @@ class CannotConnect(exceptions.HomeAssistantError):
 
 
 async def validate_user_input(hass: core.HomeAssistant, data: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate the username/password input allows us to connect.
+    """Validate the username/password input format only.
     
-    Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
+    This ultra-lightweight validation only checks that we have proper credentials.
+    The actual authentication and data retrieval will happen after integration setup
+    during the coordinator's initial data fetch and regular polling cycle.
     """
     try:
-        _LOGGER.info("🔍 Validating user credentials for Waterscope integration...")
-        _LOGGER.debug("Testing authentication for user: %s", data[CONF_USERNAME][:3] + "***")
+        _LOGGER.info("🔍 Validating user credentials format for Waterscope integration...")
+        _LOGGER.debug("Validating credentials for user: %s", data[CONF_USERNAME][:3] + "***")
         
-        # Import the HTTP authenticator
-        from .http_auth import WaterscopeHTTPAuthenticator
+        # Basic validation - check that we have username and password
+        username = data.get(CONF_USERNAME, "").strip()
+        password = data.get(CONF_PASSWORD, "").strip()
         
-        # Test HTTP authentication
-        _LOGGER.debug("Creating WaterscopeHTTPAuthenticator instance...")
-        async with WaterscopeHTTPAuthenticator() as auth:
-            _LOGGER.debug("Starting authentication test...")
-            auth_result = await auth.authenticate(data[CONF_USERNAME], data[CONF_PASSWORD])
-            if not auth_result:
-                _LOGGER.error("❌ Username/password authentication failed")
-                raise InvalidAuth("Username/password authentication failed")
+        if not username:
+            _LOGGER.error("❌ Username is required")
+            raise InvalidAuth("Username is required")
             
-            _LOGGER.debug("✅ Authentication successful, testing data retrieval with dashboard API...")
+        if not password:
+            _LOGGER.error("❌ Password is required")
+            raise InvalidAuth("Password is required")
             
-            # Use the dashboard API directly instead of the cookie-based HTTP API
-            # This uses the same hybrid approach as the authenticator
-            from .http_dashboard import WaterscopeDashboardAPI
-            _LOGGER.debug("Creating WaterscopeDashboardAPI instance for data test...")
-            async with WaterscopeDashboardAPI() as dashboard_api:
-                _LOGGER.debug("Attempting to retrieve test data...")
-                usage_data = await dashboard_api.get_data(data[CONF_USERNAME], data[CONF_PASSWORD])
-                if not usage_data:
-                    _LOGGER.error("❌ Failed to retrieve data with dashboard API")
-                    raise CannotConnect("Failed to retrieve data with dashboard API")
+        # Basic email format check for username
+        if "@" not in username or "." not in username:
+            _LOGGER.error("❌ Username should be a valid email address")
+            raise InvalidAuth("Username should be a valid email address")
                     
-            _LOGGER.info("✅ HTTP authentication and data retrieval successful")
-            _LOGGER.debug("Data retrieval test result: %s", usage_data.get('status', 'unknown'))
+        _LOGGER.info("✅ Credential format validation successful")
+        _LOGGER.debug("Credentials will be validated during first data fetch")
         
     except InvalidAuth:
-        _LOGGER.error("Invalid authentication credentials provided")
+        _LOGGER.error("Invalid credentials format provided")
         raise
     except Exception as err:
-        _LOGGER.error("HTTP authentication error: %s", str(err), exc_info=True)
+        _LOGGER.error("Credential validation error: %s", str(err), exc_info=True)
         raise CannotConnect from err
 
     # Return info that you want to store in the config entry.
-    _LOGGER.debug("Validation completed successfully, creating config entry")
+    _LOGGER.debug("Format validation completed, credentials will be stored securely")
     return {"title": f"{DEFAULT_NAME}"}
 
 
@@ -104,8 +100,9 @@ class WaterscopeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(user_input[CONF_USERNAME])
                 self._abort_if_unique_id_configured()
                 
-                # Store username/password credentials (no cookie flag needed)
+                # Store username/password credentials securely for polling cycle
                 _LOGGER.info("✅ Creating Waterscope config entry for user: %s", user_input[CONF_USERNAME][:3] + "***")
+                _LOGGER.debug("Credentials validated and will be stored securely for regular data polling")
                 return self.async_create_entry(title=info["title"], data=user_input)
                 
             except CannotConnect:

@@ -16,8 +16,9 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.helpers.event import async_track_time_change
 
-from .http_dashboard import WaterscopeDashboardAPI
+from .waterscope import WaterscopeAPI
 from .const import (
     DOMAIN,
     DEFAULT_NAME,
@@ -25,6 +26,7 @@ from .const import (
     UPDATE_INTERVAL,
     MANUFACTURER,
     MODEL,
+    WaterscopeError,
     WaterscopeAPIError,
 )
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
@@ -61,12 +63,32 @@ class WaterscopeDataCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize the data coordinator."""
         self.config_entry = config_entry
+        self._hass = hass
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(seconds=UPDATE_INTERVAL),  # Keep as fallback
         )
+        
+        # Schedule daily updates at 2:00 AM local time
+        self._schedule_daily_update()
+        
+    def _schedule_daily_update(self) -> None:
+        """Schedule daily updates at 2:00 AM local time."""
+        _LOGGER.info("📅 Scheduling daily updates at 2:00 AM local time (with 24h fallback)")
+        async_track_time_change(
+            self._hass,
+            self._scheduled_update,
+            hour=2,
+            minute=0,
+            second=0
+        )
+        
+    async def _scheduled_update(self, now) -> None:
+        """Triggered update at scheduled time (2:00 AM)."""
+        _LOGGER.info("⏰ Scheduled update triggered at 2:00 AM")
+        await self.async_request_refresh()
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Update data via dashboard API."""
@@ -78,9 +100,9 @@ class WaterscopeDataCoordinator(DataUpdateCoordinator):
             
             _LOGGER.debug("Updating data for user: %s", username[:3] + "***")
             
-            async with WaterscopeDashboardAPI() as dashboard_api:
-                _LOGGER.debug("Created dashboard API instance, fetching data...")
-                data = await dashboard_api.get_data(username, password)
+            async with WaterscopeAPI() as dashboard_api:
+                _LOGGER.debug("Created authenticated API instance, fetching data...")
+                data = await dashboard_api.get_meter_data(username, password)
                 
                 if not data:
                     _LOGGER.error("❌ Failed to fetch data from dashboard API - no data returned")
@@ -88,17 +110,17 @@ class WaterscopeDataCoordinator(DataUpdateCoordinator):
                 
                 _LOGGER.debug("✅ Raw data retrieved: %s", data)
                 
-                # Extract LCD read value
-                lcd_value = data.get('lcd_read')
-                _LOGGER.debug("Extracted LCD value: %s", lcd_value)
+                # Extract meter reading value
+                meter_value = data.get('meter_reading')
+                _LOGGER.debug("Extracted meter value: %s", meter_value)
                 
                 result = {
-                    SENSOR_LCD_READ: lcd_value,
+                    SENSOR_LCD_READ: meter_value,
                     'raw_data': data,
-                    'data_source': 'dashboard_api'
+                    'data_source': 'unified_api'
                 }
                 
-                _LOGGER.info("✅ Data update successful - LCD read: %s", lcd_value)
+                _LOGGER.info("✅ Data update successful - LCD read: %s", meter_value)
                 return result
                 
         except Exception as error:
@@ -129,7 +151,7 @@ class WaterscopeSensorBase(CoordinatorEntity, SensorEntity):
             "name": DEFAULT_NAME,
             "manufacturer": MANUFACTURER,
             "model": MODEL,
-            "sw_version": "1.0.0",
+            "sw_version": "0.0.1",
         }
 
     @property
@@ -139,7 +161,7 @@ class WaterscopeSensorBase(CoordinatorEntity, SensorEntity):
 
 
 class WaterscopeLCDReadSensor(WaterscopeSensorBase):
-    """Representation of LCD read sensor."""
+    """Representation of water LCD read sensor."""
 
     def __init__(
         self,
@@ -152,7 +174,7 @@ class WaterscopeLCDReadSensor(WaterscopeSensorBase):
         self._attr_native_unit_of_measurement = "ft³"
         self._attr_device_class = SensorDeviceClass.WATER
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
-        self._attr_icon = "mdi:water-gauge"
+        self._attr_icon = "mdi:water"
 
     @property
     def native_value(self) -> Optional[float]:
@@ -167,7 +189,7 @@ class WaterscopeLCDReadSensor(WaterscopeSensorBase):
         attributes = {
             "integration": DOMAIN,
             "last_updated": getattr(self.coordinator, 'last_update_success_time', None),
-            "description": "LCD meter read from dashboard",
+            "description": "Water LCD read from dashboard",
         }
         
         if self.coordinator.data:
@@ -178,7 +200,7 @@ class WaterscopeLCDReadSensor(WaterscopeSensorBase):
             # Add raw data information
             if self.coordinator.data.get('raw_data'):
                 raw_data = self.coordinator.data['raw_data']
-                attributes["raw_lcd_text"] = raw_data.get('raw_lcd_text')
+                attributes["raw_meter_text"] = raw_data.get('raw_meter_text')
                 attributes["api_status"] = raw_data.get('status')
         
         return attributes

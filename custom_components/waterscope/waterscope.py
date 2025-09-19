@@ -1,6 +1,6 @@
 """
-Pure HTTP implementation of Waterscope authentication flow.
-Reverse engineered from network traffic analysis to eliminate browser automation.
+Unified Waterscope API combining authentication and dashboard data extraction.
+Pure HTTP implementation eliminating browser automation dependencies.
 """
 
 import re
@@ -15,6 +15,23 @@ import json
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# Handle both package and standalone imports
+try:
+    from .const import WaterscopeError, WaterscopeAPIError, WaterscopeAuthError
+except ImportError:
+    # Fallback for standalone execution
+    class WaterscopeError(Exception):
+        """Base exception for Waterscope errors."""
+        pass
+
+    class WaterscopeAPIError(WaterscopeError):
+        """Exception for API-related errors."""
+        pass
+
+    class WaterscopeAuthError(WaterscopeError):
+        """Exception for authentication-related errors."""
+        pass
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,12 +85,13 @@ def _log_response_details(response, content: str = None):
             print("... (truncated)")
     print("=" * 50)
 
-class WaterscopeHTTPAuthenticator:
-    """Pure HTTP implementation of Waterscope OAuth authentication flow."""
+
+class WaterscopeAPI:
+    """Unified Waterscope API for authentication and dashboard data extraction."""
     
     def __init__(self):
         self.session = None
-        self.requests_session = None  # Expose requests session for dashboard access
+        self.requests_session = None
         self.authenticated = False
         self._auth_cookies = {}
         
@@ -86,6 +104,10 @@ class WaterscopeHTTPAuthenticator:
             'response_type': 'code id_token',
             'response_mode': 'form_post',
             'scope': 'openid profile offline_access https://metronb2c.onmicrosoft.com/57f60f76-c91d-404d-8f70-828b0f958a83/read https://metronb2c.onmicrosoft.com/57f60f76-c91d-404d-8f70-828b0f958a83/write'
+        }
+        
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
     
     async def __aenter__(self):
@@ -410,9 +432,8 @@ class WaterscopeHTTPAuthenticator:
             username, password, csrf_token, tx_state, referer_url, essential_cookies
         )
         
-        # Store the updated session for use in OAuth confirmation
+        # Store the updated session for use in OAuth confirmation and dashboard access
         self._password_session = updated_session
-        # Also expose it as requests_session for dashboard access
         self.requests_session = updated_session
         _LOGGER.debug("Password submission completed, confirm URL: %s", confirm_url[:50] + "...")
         
@@ -437,71 +458,53 @@ class WaterscopeHTTPAuthenticator:
         for key, value in essential_cookies.items():
             sync_session.cookies.set(key, value)
         
-        # Multiple approaches to try for Azure B2C password submission
-        approaches = [
-            {
-                'url': "https://metronb2c.b2clogin.com/metronb2c.onmicrosoft.com/B2C_1_mainsso_web/SelfAsserted",
-                'params': {'tx': tx_state, 'p': 'B2C_1_mainsso_web'},
-                'data': {'request_type': 'RESPONSE', 'email': username, 'password': password}
-            },
-            {
-                'url': "https://metronb2c.b2clogin.com/metronb2c.onmicrosoft.com/B2C_1_mainsso_web/SelfAsserted",
-                'params': {'tx': f'StateProperties={tx_state}', 'p': 'B2C_1_mainsso_web'},
-                'data': {'request_type': 'RESPONSE', 'email': username, 'password': password}
-            },
-            {
-                'url': "https://metronb2c.b2clogin.com/metronb2c.onmicrosoft.com/B2C_1_mainsso_web/SelfAsserted",
-                'params': {'tx': tx_state, 'p': 'B2C_1_mainsso_web'},
-                'data': {'signInName': username, 'password': password, 'request_type': 'RESPONSE'}
-            }
-        ]
+        # Use the working approach 1 for Azure B2C password submission
+        _LOGGER.info("🔄 Submitting password to Azure B2C")
         
-        for i, approach in enumerate(approaches, 1):
-            _LOGGER.info(f"🔄 Trying sync approach {i}: {approach['url']}")
-            
-            # Essential headers only (matching successful requests implementation)
-            azure_headers = {
-                'Accept': 'application/json, text/javascript, */*; q=0.01',
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'X-CSRF-TOKEN': csrf_token,
-                'X-Requested-With': 'XMLHttpRequest',
-                'Origin': 'https://metronb2c.b2clogin.com',
-                'Referer': referer_url
-            }
-            
-            _log_request_details("POST", approach['url'], azure_headers, approach['data'], approach['params'])
-            
-            try:
-                response = sync_session.post(
-                    approach['url'],
-                    params=approach['params'],
-                    data=approach['data'],
-                    headers=azure_headers
-                )
-                
-                _log_response_details(response, response.text)
-                _LOGGER.info(f"Sync approach {i} response: {response.status_code}")
-                
-                if response.status_code == 200:
-                    _LOGGER.info(f"✅ Password submitted successfully with sync approach {i}")
-                    # Construct confirmation URL
-                    confirm_url = f"https://metronb2c.b2clogin.com/metronb2c.onmicrosoft.com/B2C_1_mainsso_web/api/CombinedSigninAndSignup/confirmed"
-                    
-                    # Transfer response cookies back to main aiohttp session
-                    for cookie in sync_session.cookies:
-                        self.session.cookie_jar.update_cookies({cookie.name: cookie.value})
-                    
-                    # Return both the confirm URL and the updated session with new cookies
-                    return confirm_url, sync_session
-                else:
-                    _LOGGER.warning(f"Sync approach {i} failed: {response.status_code} - {response.text[:200]}")
-                    
-            except Exception as e:
-                _LOGGER.error(f"Sync approach {i} error: {e}")
-                continue
+        # Essential headers only (matching successful requests implementation)
+        azure_headers = {
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'X-CSRF-TOKEN': csrf_token,
+            'X-Requested-With': 'XMLHttpRequest',
+            'Origin': 'https://metronb2c.b2clogin.com',
+            'Referer': referer_url
+        }
         
-        # If all approaches failed
-        raise RuntimeError(f"All sync password submission approaches failed")
+        url = "https://metronb2c.b2clogin.com/metronb2c.onmicrosoft.com/B2C_1_mainsso_web/SelfAsserted"
+        params = {'tx': tx_state, 'p': 'B2C_1_mainsso_web'}
+        data = {'request_type': 'RESPONSE', 'email': username, 'password': password}
+        
+        _log_request_details("POST", url, azure_headers, data, params)
+        
+        try:
+            response = sync_session.post(
+                url,
+                params=params,
+                data=data,
+                headers=azure_headers
+            )
+            
+            _log_response_details(response, response.text)
+            _LOGGER.info(f"Password submission response: {response.status_code}")
+            
+            if response.status_code == 200:
+                _LOGGER.info("✅ Password submitted successfully")
+                # Construct confirmation URL
+                confirm_url = f"https://metronb2c.b2clogin.com/metronb2c.onmicrosoft.com/B2C_1_mainsso_web/api/CombinedSigninAndSignup/confirmed"
+                
+                # Transfer response cookies back to main aiohttp session
+                for cookie in sync_session.cookies:
+                    self.session.cookie_jar.update_cookies({cookie.name: cookie.value})
+                
+                # Return both the confirm URL and the updated session with new cookies
+                return confirm_url, sync_session
+            else:
+                raise RuntimeError(f"Password submission failed: {response.status_code} - {response.text[:200]}")
+                
+        except Exception as e:
+            _LOGGER.error(f"Password submission error: {e}")
+            raise RuntimeError(f"Password submission failed: {e}")
     
     async def _complete_oauth_confirmation(self, confirm_url: str, csrf_token: str, tx_state: str) -> Dict[str, str]:
         """Complete OAuth confirmation using hybrid approach (requests via asyncio.to_thread)."""
@@ -548,78 +551,57 @@ class WaterscopeHTTPAuthenticator:
         for key, value in essential_cookies.items():
             sync_session.cookies.set(key, value)
         
-        # The tx_state might be the full OAuth state parameter, let's try different formats
-        approaches = [
-            # Approach 1: Use state parameter directly
-            {
-                'rememberMe': 'false',
-                'csrf_token': csrf_token,
-                'state': tx_state,
-                'p': 'B2C_1_mainsso_web',
-                'diags': '{"pageViewId":"generated-uuid","pageId":"CombinedSigninAndSignup","trace":[]}'
-            },
-            # Approach 2: Traditional tx parameter
-            {
-                'rememberMe': 'false',
-                'csrf_token': csrf_token,
-                'tx': f'StateProperties={tx_state}',
-                'p': 'B2C_1_mainsso_web',
-                'diags': '{"pageViewId":"generated-uuid","pageId":"CombinedSigninAndSignup","trace":[]}'
-            },
-            # Approach 3: Just the csrf_token and basic params
-            {
-                'rememberMe': 'false',
-                'csrf_token': csrf_token,
-                'p': 'B2C_1_mainsso_web'
-            }
-        ]
+        # Use the working approach 1 for OAuth confirmation
+        _LOGGER.info("🔄 Completing OAuth confirmation")
         
-        for i, params in enumerate(approaches, 1):
-            _LOGGER.info(f"🔄 Trying sync confirmation approach {i}")
+        params = {
+            'rememberMe': 'false',
+            'csrf_token': csrf_token,
+            'state': tx_state,
+            'p': 'B2C_1_mainsso_web',
+            'diags': '{"pageViewId":"generated-uuid","pageId":"CombinedSigninAndSignup","trace":[]}'
+        }
+        
+        try:
+            response = sync_session.get(
+                confirm_url,
+                params=params,
+                allow_redirects=True
+            )
             
-            try:
-                response = sync_session.get(
-                    confirm_url,
-                    params=params,
-                    allow_redirects=True
-                )
+            _log_response_details(response, response.text)
+            _LOGGER.info(f"OAuth confirmation response: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Parse response for form data that will be posted back to Waterscope
+                soup = BeautifulSoup(response.text, 'html.parser')
+                form = soup.find('form')
                 
-                _log_response_details(response, response.text)
-                _LOGGER.info(f"Sync confirmation approach {i} response: {response.status_code}")
-                
-                if response.status_code == 200:
-                    # Parse response for form data that will be posted back to Waterscope
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    form = soup.find('form')
+                if form:
+                    # Extract form data
+                    auth_data = {}
+                    for input_elem in form.find_all('input'):
+                        name = input_elem.get('name')
+                        value = input_elem.get('value')
+                        if name and value:
+                            auth_data[name] = value
                     
-                    if form:
-                        # Extract form data
-                        auth_data = {}
-                        for input_elem in form.find_all('input'):
-                            name = input_elem.get('name')
-                            value = input_elem.get('value')
-                            if name and value:
-                                auth_data[name] = value
+                    if auth_data:
+                        _LOGGER.info("✅ OAuth confirmation completed successfully")
                         
-                        if auth_data:
-                            _LOGGER.info(f"✅ OAuth confirmation completed with sync approach {i}")
-                            
-                            # Transfer response cookies back to main aiohttp session
-                            for cookie in sync_session.cookies:
-                                self.session.cookie_jar.update_cookies({cookie.name: cookie.value})
-                            
-                            return auth_data
-                    else:
-                        _LOGGER.warning(f"Sync approach {i}: No form found in response")
+                        # Transfer response cookies back to main aiohttp session
+                        for cookie in sync_session.cookies:
+                            self.session.cookie_jar.update_cookies({cookie.name: cookie.value})
+                        
+                        return auth_data
                 else:
-                    _LOGGER.warning(f"Sync approach {i} failed: {response.status_code} - {response.text[:200]}")
-                    
-            except Exception as e:
-                _LOGGER.error(f"Sync confirmation approach {i} error: {e}")
-                continue
-        
-        # If all approaches failed
-        raise RuntimeError(f"All sync OAuth confirmation approaches failed")
+                    raise RuntimeError("No form found in OAuth confirmation response")
+            else:
+                raise RuntimeError(f"OAuth confirmation failed: {response.status_code} - {response.text[:200]}")
+                
+        except Exception as e:
+            _LOGGER.error(f"OAuth confirmation error: {e}")
+            raise RuntimeError(f"OAuth confirmation failed: {e}")
     
     def _complete_oauth_confirmation_with_session(self, confirm_url: str, csrf_token: str, tx_state: str,
                                                  sync_session: requests.Session) -> Dict[str, str]:
@@ -627,78 +609,57 @@ class WaterscopeHTTPAuthenticator:
         
         _LOGGER.info("🔧 Using existing sync session with updated cookies for OAuth confirmation")
         
-        # The tx_state might be the full OAuth state parameter, let's try different formats
-        approaches = [
-            # Approach 1: Use state parameter directly
-            {
-                'rememberMe': 'false',
-                'csrf_token': csrf_token,
-                'state': tx_state,
-                'p': 'B2C_1_mainsso_web',
-                'diags': '{"pageViewId":"generated-uuid","pageId":"CombinedSigninAndSignup","trace":[]}'
-            },
-            # Approach 2: Traditional tx parameter
-            {
-                'rememberMe': 'false',
-                'csrf_token': csrf_token,
-                'tx': f'StateProperties={tx_state}',
-                'p': 'B2C_1_mainsso_web',
-                'diags': '{"pageViewId":"generated-uuid","pageId":"CombinedSigninAndSignup","trace":[]}'
-            },
-            # Approach 3: Just the csrf_token and basic params
-            {
-                'rememberMe': 'false',
-                'csrf_token': csrf_token,
-                'p': 'B2C_1_mainsso_web'
-            }
-        ]
+        # Use the working approach 1 for OAuth confirmation with existing session
+        _LOGGER.info("🔄 Completing OAuth confirmation with existing session")
         
-        for i, params in enumerate(approaches, 1):
-            _LOGGER.info(f"🔄 Trying existing session confirmation approach {i}")
+        params = {
+            'rememberMe': 'false',
+            'csrf_token': csrf_token,
+            'state': tx_state,
+            'p': 'B2C_1_mainsso_web',
+            'diags': '{"pageViewId":"generated-uuid","pageId":"CombinedSigninAndSignup","trace":[]}'
+        }
+        
+        try:
+            response = sync_session.get(
+                confirm_url,
+                params=params,
+                allow_redirects=True
+            )
             
-            try:
-                response = sync_session.get(
-                    confirm_url,
-                    params=params,
-                    allow_redirects=True
-                )
+            _log_response_details(response, response.text)
+            _LOGGER.info(f"OAuth confirmation response: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Parse response for form data that will be posted back to Waterscope
+                soup = BeautifulSoup(response.text, 'html.parser')
+                form = soup.find('form')
                 
-                _log_response_details(response, response.text)
-                _LOGGER.info(f"Existing session confirmation approach {i} response: {response.status_code}")
-                
-                if response.status_code == 200:
-                    # Parse response for form data that will be posted back to Waterscope
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    form = soup.find('form')
+                if form:
+                    # Extract form data
+                    auth_data = {}
+                    for input_elem in form.find_all('input'):
+                        name = input_elem.get('name')
+                        value = input_elem.get('value')
+                        if name and value:
+                            auth_data[name] = value
                     
-                    if form:
-                        # Extract form data
-                        auth_data = {}
-                        for input_elem in form.find_all('input'):
-                            name = input_elem.get('name')
-                            value = input_elem.get('value')
-                            if name and value:
-                                auth_data[name] = value
+                    if auth_data:
+                        _LOGGER.info("✅ OAuth confirmation completed successfully with existing session")
                         
-                        if auth_data:
-                            _LOGGER.info(f"✅ OAuth confirmation completed with existing session approach {i}")
-                            
-                            # Transfer response cookies back to main aiohttp session
-                            for cookie in sync_session.cookies:
-                                self.session.cookie_jar.update_cookies({cookie.name: cookie.value})
-                            
-                            return auth_data
-                    else:
-                        _LOGGER.warning(f"Existing session approach {i}: No form found in response")
+                        # Transfer response cookies back to main aiohttp session
+                        for cookie in sync_session.cookies:
+                            self.session.cookie_jar.update_cookies({cookie.name: cookie.value})
+                        
+                        return auth_data
                 else:
-                    _LOGGER.warning(f"Existing session approach {i} failed: {response.status_code} - {response.text[:200]}")
-                    
-            except Exception as e:
-                _LOGGER.error(f"Existing session confirmation approach {i} error: {e}")
-                continue
-        
-        # If all approaches failed
-        raise RuntimeError(f"All existing session OAuth confirmation approaches failed")
+                    raise RuntimeError("No form found in OAuth confirmation response")
+            else:
+                raise RuntimeError(f"OAuth confirmation failed: {response.status_code} - {response.text[:200]}")
+                
+        except Exception as e:
+            _LOGGER.error(f"OAuth confirmation error: {e}")
+            raise RuntimeError(f"OAuth confirmation failed: {e}")
     
     async def _complete_token_exchange(self, auth_data: Dict[str, str]) -> bool:
         """Complete token exchange using hybrid approach (requests via asyncio.to_thread)."""
@@ -779,6 +740,9 @@ class WaterscopeHTTPAuthenticator:
                 for cookie in sync_session.cookies:
                     self.session.cookie_jar.update_cookies({cookie.name: cookie.value})
                 
+                # Keep the requests session for dashboard access
+                self.requests_session = sync_session
+                
                 return True
             else:
                 _LOGGER.error(f"Authentication test failed: {test_response.status_code}")
@@ -787,6 +751,259 @@ class WaterscopeHTTPAuthenticator:
         except Exception as e:
             _LOGGER.error(f"Token exchange error: {e}")
             return False
+    
+    async def get_meter_reading(self, username: str, password: str) -> Optional[str]:
+        """Extract meter reading from dashboard using hybrid approach."""
+        try:
+            _LOGGER.debug("🔄 Starting meter reading extraction for user: %s", username[:3] + "***")
+            
+            # Step 1: Authenticate if not already authenticated
+            if not self.authenticated:
+                _LOGGER.debug("Step 1: Authenticating...")
+                auth_result = await self.authenticate(username, password)
+                if not auth_result:
+                    _LOGGER.error("❌ Authentication failed for meter reading extraction")
+                    raise WaterscopeAuthError("Authentication failed")
+                
+                _LOGGER.debug("✅ Authentication successful, using hybrid approach for dashboard access...")
+            
+            # Step 2: Use requests session directly (hybrid approach)
+            dashboard_url = "https://waterscope.us/Consumer/Consumer/Index"
+            _LOGGER.debug("Step 2: Accessing dashboard at %s using requests session", dashboard_url)
+            
+            def get_dashboard_sync():
+                """Synchronous dashboard access using authenticated requests session."""
+                
+                # Define URLs inside the function
+                homepage_url = "https://waterscope.us/"
+                dashboard_url = "https://waterscope.us/Consumer/Consumer/Index"
+                
+                # First, check if we need to complete OAuth token exchange by accessing the homepage
+                _LOGGER.debug("Checking OAuth status by accessing homepage first...")
+                initial_response = self.requests_session.get(
+                    homepage_url,
+                    headers=self.headers,
+                    timeout=30,
+                    allow_redirects=True
+                )
+                
+                _LOGGER.debug("Homepage response status: %s", initial_response.status_code)
+                _LOGGER.debug("Homepage response URL: %s", initial_response.url)
+                
+                if initial_response.status_code != 200:
+                    _LOGGER.error("❌ Homepage access failed: HTTP %s", initial_response.status_code)
+                    raise WaterscopeAPIError(f"Homepage access failed: HTTP {initial_response.status_code}")
+                
+                html_content = initial_response.text
+                
+                # Check if we got an OAuth token exchange form that needs to be submitted
+                if 'form id=\'auto\'' in html_content and 'action=\'https://waterscope.us/\'' in html_content:
+                    _LOGGER.debug("🔄 Detected OAuth token exchange form, submitting automatically...")
+                    
+                    # Extract form data from the HTML
+                    from bs4 import BeautifulSoup
+                    soup = BeautifulSoup(html_content, 'html.parser')
+                    form = soup.find('form', {'id': 'auto'})
+                    
+                    if form:
+                        form_data = {}
+                        for input_elem in form.find_all('input', {'type': 'hidden'}):
+                            name = input_elem.get('name')
+                            value = input_elem.get('value')
+                            if name and value:
+                                form_data[name] = value
+                        
+                        _LOGGER.debug("Submitting OAuth token exchange with %s parameters", len(form_data))
+                        
+                        # Submit the form to complete OAuth flow
+                        token_response = self.requests_session.post(
+                            'https://waterscope.us/',
+                            data=form_data,
+                            headers=self.headers,
+                            timeout=30,
+                            allow_redirects=True
+                        )
+                        
+                        _LOGGER.debug("Token exchange response status: %s", token_response.status_code)
+                        _LOGGER.debug("Token exchange response URL: %s", token_response.url)
+                        
+                        if token_response.status_code != 200:
+                            _LOGGER.error("❌ Token exchange failed: HTTP %s", token_response.status_code)
+                            raise WaterscopeAPIError(f"Token exchange failed: HTTP {token_response.status_code}")
+                        
+                        _LOGGER.debug("✅ OAuth token exchange completed successfully")
+                
+                # Now access the actual dashboard
+                _LOGGER.debug("Accessing dashboard at %s", dashboard_url)
+                dashboard_response = self.requests_session.get(
+                    dashboard_url,
+                    headers=self.headers,
+                    timeout=30
+                )
+                
+                _LOGGER.debug("Dashboard response status: %s", dashboard_response.status_code)
+                _LOGGER.debug("Dashboard response URL: %s", dashboard_response.url)
+                
+                if dashboard_response.status_code != 200:
+                    _LOGGER.error("❌ Dashboard access failed: HTTP %s", dashboard_response.status_code)
+                    raise WaterscopeAPIError(f"Dashboard access failed: HTTP {dashboard_response.status_code}")
+                
+                return dashboard_response.text
+            
+            # Run requests call in thread pool to maintain async compatibility
+            html_content = await asyncio.to_thread(get_dashboard_sync)
+            _LOGGER.debug("Retrieved dashboard HTML (%s characters)", len(html_content))
+            
+            # Log full HTML content for debugging
+            _LOGGER.info("🔍 DASHBOARD HTML CONTENT (for debugging meter reading extraction):")
+            _LOGGER.info("=" * 80)
+            _LOGGER.info(html_content)
+            _LOGGER.info("=" * 80)
+            
+            # Step 3: Parse HTML and extract meter reading
+            _LOGGER.debug("Step 3: Parsing HTML and extracting meter reading...")
+            meter_value = self._extract_meter_reading(html_content)
+            _LOGGER.debug("Meter reading extraction result: %s", meter_value)
+            
+            return meter_value
+        
+        except Exception as e:
+            _LOGGER.error("Failed to get meter reading: %s", str(e), exc_info=True)
+            raise WaterscopeAPIError(f"Meter reading extraction failed: {e}") from e
+    
+    def _extract_meter_reading(self, html_content: str) -> Optional[str]:
+        """Extract meter reading from dashboard HTML."""
+        try:
+            _LOGGER.debug("🔍 Extracting meter reading from dashboard HTML...")
+            _LOGGER.debug("HTML content length: %s characters", len(html_content))
+            
+            # Log first 2000 characters of HTML for debugging
+            _LOGGER.info("🔍 HTML SAMPLE (first 2000 chars): %s", html_content[:2000])
+            
+            # Check if we have the expected dashboard elements
+            if 'lcd-read_NEW' in html_content:
+                _LOGGER.info("✅ Found 'lcd-read_NEW' in HTML content")
+            else:
+                _LOGGER.warning("❌ 'lcd-read_NEW' NOT found in HTML content")
+            
+            if 'Consumer/Consumer/Index' in html_content or 'Consumer Portal' in html_content:
+                _LOGGER.info("✅ Appears to be dashboard page")
+            else:
+                _LOGGER.warning("❌ Does not appear to be dashboard page")
+            
+            # Parse HTML with BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Method 1: Look for specific meter reading elements from actual HTML structure
+            _LOGGER.debug("Method 1: Looking for meter reading elements by ID...")
+            selectors = [
+                '#lcd-read_NEW',           # Primary meter reading element
+                '#lcd-read_NEW_1',         # Secondary meter reading element
+                'span[id="lcd-read_NEW"]',
+                'span[id="lcd-read_NEW_1"]'
+            ]
+            
+            for selector in selectors:
+                element = soup.select_one(selector)
+                if element:
+                    text = element.get_text(strip=True)
+                    if text and text != 'NA' and '.' in text:
+                        _LOGGER.info("✅ Found meter reading using selector '%s': %s", selector, text)
+                        return text
+                    _LOGGER.debug("Found element with selector '%s' but text was: '%s'", selector, text)
+            
+            # Method 2: Pattern matching for meter reading format (XXXXXX.XX)
+            _LOGGER.debug("Method 2: Pattern matching for meter reading format...")
+            # Look for patterns like "006456.29" (6 digits, dot, 2 digits)
+            pattern = r'\b\d{6}\.\d{2}\b'
+            matches = re.findall(pattern, html_content)
+            if matches:
+                # Filter out any obviously non-meter values (like coordinates, etc.)
+                for match in matches:
+                    # Meter readings are typically positive numbers < 999999
+                    try:
+                        value = float(match)
+                        if 0 < value < 999999:
+                            _LOGGER.info("✅ Found meter reading using pattern matching: %s", match)
+                            return match
+                    except ValueError:
+                        continue
+            
+            # Method 3: Search around "LCD Read" text in HTML
+            _LOGGER.debug("Method 3: Searching around 'LCD Read' text...")
+            lcd_pattern = r'LCD Read[^0-9]*(\d+(?:\.\d+)?)\s*Ft3'
+            match = re.search(lcd_pattern, html_content, re.IGNORECASE)
+            if match:
+                value = match.group(1)
+                _LOGGER.info("✅ Found meter reading around 'LCD Read' text: %s", value)
+                return value
+            
+            # Method 4: Look for elements containing "LCD Read"
+            _LOGGER.debug("Method 4: Searching elements containing 'LCD Read'...")
+            lcd_elements = soup.find_all(string=re.compile(r'LCD Read', re.IGNORECASE))
+            _LOGGER.debug("Found %s elements containing 'LCD Read'", len(lcd_elements))
+            
+            for i, element in enumerate(lcd_elements):
+                _LOGGER.debug("Processing LCD element %s", i)
+                parent = element.parent if element.parent else element
+                # Search within parent and siblings for numeric values
+                parent_text = parent.get_text() if hasattr(parent, 'get_text') else str(parent)
+                _LOGGER.debug("Parent text: %s", parent_text[:100] + "..." if len(parent_text) > 100 else parent_text)
+                
+                # Look for numeric patterns in the parent text
+                numeric_pattern = r'(\d+(?:\.\d+)?)'
+                numbers = re.findall(numeric_pattern, parent_text)
+                for number in numbers:
+                    try:
+                        value = float(number)
+                        # Meter readings are reasonable water meter values
+                        if 0 < value < 999999 and '.' in number:
+                            _LOGGER.info("✅ Found meter reading in parent element: %s", number)
+                            return number
+                    except ValueError:
+                        continue
+
+            _LOGGER.warning("❌ Could not extract meter reading using any method")
+            return None
+            
+        except Exception as e:
+            _LOGGER.error("Error extracting meter reading: %s", str(e), exc_info=True)
+            return None
+    
+    async def get_meter_data(self, username: str, password: str) -> Dict[str, Any]:
+        """Get complete meter data including reading."""
+        try:
+            _LOGGER.debug("🔄 Getting complete dashboard data for user: %s", username[:3] + "***")
+            
+            meter_value = await self.get_meter_reading(username, password)
+            
+            if meter_value is None:
+                _LOGGER.error("❌ No meter reading found in dashboard")
+                raise WaterscopeAPIError("No meter reading found")
+            
+            _LOGGER.debug("Raw meter value extracted: %s", meter_value)
+            
+            # Convert to float for Home Assistant
+            try:
+                numeric_value = float(meter_value)
+                _LOGGER.debug("Converted meter value to float: %s", numeric_value)
+            except ValueError as ve:
+                _LOGGER.error("❌ Invalid meter reading format: %s", meter_value)
+                raise WaterscopeAPIError(f"Invalid meter reading format: {meter_value}") from ve
+            
+            result = {
+                'meter_reading': numeric_value,
+                'raw_meter_text': f"{meter_value} Ft3",
+                'status': 'success',
+                'timestamp': None  # Will be set by coordinator
+            }
+            
+            _LOGGER.info("✅ Dashboard data retrieval successful: Meter reading = %s Ft3", meter_value)
+            return result
+            
+        except Exception as e:
+            _LOGGER.error("Dashboard data retrieval failed: %s", str(e), exc_info=True)
+            raise WaterscopeAPIError(f"Data retrieval failed: {e}") from e
     
     def get_session_cookies(self) -> Dict[str, str]:
         """Get the authentication cookies for use in subsequent requests."""
@@ -809,6 +1026,20 @@ class WaterscopeHTTPAuthenticator:
             cookie_pairs.append(f"{cookie.key}={cookie.value}")
         
         return "; ".join(cookie_pairs)
+    
+    async def close(self):
+        """Close the session."""
+        if self.session and not self.session.closed:
+            await self.session.close()
+
+    def __enter__(self):
+        """Sync context manager entry (for compatibility)."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Sync context manager exit (for compatibility)."""
+        # Note: Cannot await close() in sync context
+        pass
 
 
 # Convenience function for simple authentication
@@ -824,7 +1055,7 @@ async def authenticate_and_get_cookies(username: str, password: str) -> Optional
         Cookie string for use in HTTP requests, or None if authentication failed
     """
     try:
-        async with WaterscopeHTTPAuthenticator() as auth:
+        async with WaterscopeAPI() as auth:
             if await auth.authenticate(username, password):
                 return auth.get_cookies_string()
             return None
@@ -848,16 +1079,23 @@ if __name__ == "__main__":
             username = input("Username: ")
             password = getpass.getpass("Password: ")
         
-        print("🚀 Testing HTTP-only authentication...")
+        print("🚀 Testing unified Waterscope API...")
         print("🔍 Debug mode enabled - detailed logging active")
         
-        cookies = await authenticate_and_get_cookies(username, password)
-        
-        if cookies:
-            print("✅ Authentication successful!")
-            print("🍪 Session cookies:", cookies[:100] + "..." if len(cookies) > 100 else cookies)
-        else:
-            print("❌ Authentication failed")
-            sys.exit(1)
+        async with WaterscopeAPI() as api:
+            # Test authentication
+            auth_result = await api.authenticate(username, password)
+            if auth_result:
+                print("✅ Authentication successful!")
+                
+                # Test meter reading
+                meter_data = await api.get_meter_data(username, password)
+                if meter_data:
+                    print(f"✅ Meter reading: {meter_data['meter_reading']} Ft3")
+                else:
+                    print("❌ Failed to get meter reading")
+            else:
+                print("❌ Authentication failed")
+                sys.exit(1)
     
     asyncio.run(main())

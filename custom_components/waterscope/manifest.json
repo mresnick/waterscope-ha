@@ -1,7 +1,7 @@
 {
   "domain": "waterscope",
   "name": "Waterscope",
-  "version": "3.0.0",
+  "version": "0.0.1",
   "documentation": "https://github.com/your-username/waterscope-ha",
   "issue_tracker": "https://github.com/your-username/waterscope-ha/issues",
   "dependencies": [],

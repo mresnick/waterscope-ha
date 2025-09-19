@@ -71,10 +71,10 @@ The authentication process eliminates the need for browser automation while main
 
 ### Core Components
 
-- **`http_auth.py`** - Pure HTTP authentication implementation
-- **`http_api.py`** - Dashboard data extraction and API calls
-- **`sensor.py`** - Home Assistant sensor entities
+- **`waterscope.py`** - Unified API providing both authentication and dashboard data extraction via `WaterscopeAPI`
+- **`sensor.py`** - Home Assistant sensor entities and data coordinator
 - **`config_flow.py`** - Integration configuration interface
+- **`const.py`** - Constants, URLs, and exception definitions
 
 ### Authentication Flow
 
@@ -82,15 +82,17 @@ The authentication process eliminates the need for browser automation while main
 Username/Password → Azure B2C OAuth → Session Cookies → Dashboard Access → Data Extraction
 ```
 
-The implementation handles the complete 7-step OAuth authentication process:
+The implementation handles the complete 7-step OAuth authentication process using a hybrid approach via the unified `WaterscopeAPI`:
 
 1. Load initial login page
 2. Submit username and capture OAuth redirect
 3. Load Azure B2C page and extract CSRF tokens
-4. Submit password to Azure B2C
-5. Complete OAuth confirmation
+4. Submit password to Azure B2C (hybrid aiohttp/requests via asyncio.to_thread)
+5. Complete OAuth confirmation using authenticated session
 6. Exchange tokens with Waterscope
-7. Validate session cookies
+7. Validate session and extract dashboard data
+
+All authentication and data extraction functionality is consolidated into a single `WaterscopeAPI` class that provides both `authenticate()` and `get_meter_data()` methods.
 
 ---
 
@@ -101,7 +103,7 @@ The implementation handles the complete 7-step OAuth authentication process:
 Test your authentication with the included validation script:
 
 ```bash
-python test_consumer_dashboard.py
+python tests/test_standalone_auth.py
 ```
 
 This will:
@@ -166,20 +168,16 @@ logger:
 
 ```
 custom_components/waterscope/
-├── __init__.py          # Integration setup
-├── config_flow.py       # Configuration interface
-├── const.py            # Constants and configuration
-├── http_auth.py        # HTTP authentication implementation
-├── http_api.py         # Dashboard data extraction
-├── sensor.py           # Home Assistant sensors
-├── manifest.json       # Integration metadata
-└── strings.json        # UI text and translations
+├── __init__.py              # Integration setup and coordinator management
+├── config_flow.py           # Configuration interface and validation
+├── const.py                # Constants, URLs, and exception definitions
+├── waterscope.py           # Unified API (WaterscopeAPI) - authentication and data extraction
+├── sensor.py               # Home Assistant sensors and data coordinator
+├── manifest.json           # Integration metadata
+└── strings.json            # UI text and translations
 
 tests/
-├── test_http_authentication.py    # Authentication tests
-├── test_http_api.py              # API tests
-├── test_implementation_status.py  # Implementation validation
-└── test_standalone_auth.py       # Standalone auth tests
+└── test_standalone_auth.py       # Authentication flow tests
 ```
 
 ### Authentication Implementation Details

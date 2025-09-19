@@ -31,14 +31,14 @@ AUTH_MODE_COOKIES = "cookies"
 AUTH_MODE_HTTP = "http"
 
 # API Errors
-class WaterscopeAPIError(Exception):
-    """Base exception for Waterscope API errors."""
+class WaterscopeError(Exception):
+    """Base exception for Waterscope integration."""
     pass
 
-class WaterscopeAuthError(WaterscopeAPIError):
+class WaterscopeAuthError(WaterscopeError):
     """Authentication error."""
     pass
 
-class WaterscopeHTTPAuthError(WaterscopeAPIError):
-    """HTTP authentication error."""
+class WaterscopeAPIError(WaterscopeError):
+    """API communication error."""
     pass
