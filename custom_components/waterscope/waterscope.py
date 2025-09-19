@@ -992,7 +992,7 @@ class WaterscopeAPI:
                 _LOGGER.debug("✅ Authentication successful, using hybrid approach for dashboard access...")
             
             # Step 2: Use requests session directly (hybrid approach)
-            dashboard_url = "https://waterscope.us/Consumer/Consumer/Index"
+            dashboard_url = "https://waterscope.us/Consumer/Consumer/Index#ConsumerDashboard"
             _LOGGER.debug("Step 2: Accessing dashboard at %s using requests session", dashboard_url)
             
             def get_dashboard_sync():
@@ -1000,7 +1000,7 @@ class WaterscopeAPI:
                 
                 # Define URLs inside the function
                 homepage_url = "https://waterscope.us/"
-                dashboard_url = "https://waterscope.us/Consumer/Consumer/Index"
+                dashboard_url = "https://waterscope.us/Consumer/Consumer/Index#ConsumerDashboard"
                 
                 # First, check if we need to complete OAuth token exchange by accessing the homepage
                 _LOGGER.debug("Checking OAuth status by accessing homepage first...")
