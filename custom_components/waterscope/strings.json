@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Choose Authentication Method",
+        "description": "Select how you want to authenticate with Waterscope",
+        "data": {
+          "use_cookies": "Use session cookies (fast but requires manual cookie extraction)"
+        }
+      },
+      "cookies": {
+        "title": "Cookie-based Authentication",
+        "description": "Login to Waterscope in your browser, then extract and paste your session cookies here. {instructions}",
+        "data": {
+          "session_cookies": "Session Cookies",
+          "csrf_token": "CSRF Token (optional)"
+        }
+      },
+      "password": {
+        "title": "Username/Password Authentication",
+        "description": "Enter your Waterscope login credentials.\n\nYour credentials will be used to automatically obtain session cookies through a secure HTTP authentication flow. This is the recommended method for most users.",
+        "data": {
+          "username": "Username/Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Waterscope. Please check your internet connection and try again.",
+      "invalid_auth": "Invalid authentication credentials. Please verify your username and password are correct.",
+      "unknown": "An unexpected error occurred. Please try again or check the logs for more details."
+    },
+    "abort": {
+      "already_configured": "Account is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Waterscope Options",
+        "description": "Configure options for your Waterscope integration."
+      }
+    }
+  }
+}

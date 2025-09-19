@@ -1,0 +1,17 @@
+{
+  "domain": "waterscope",
+  "name": "Waterscope",
+  "version": "3.0.0",
+  "documentation": "https://github.com/your-username/waterscope-ha",
+  "issue_tracker": "https://github.com/your-username/waterscope-ha/issues",
+  "dependencies": [],
+  "codeowners": [],
+  "requirements": [
+    "requests>=2.31.0",
+    "beautifulsoup4>=4.12.0",
+    "aiohttp>=3.8.0"
+  ],
+  "config_flow": true,
+  "integration_type": "hub",
+  "iot_class": "cloud_polling"
+}
