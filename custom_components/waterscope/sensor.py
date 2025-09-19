@@ -23,6 +23,10 @@ from .const import (
     DOMAIN,
     DEFAULT_NAME,
     SENSOR_LCD_READ,
+    SENSOR_PREVIOUS_DAY_CONSUMPTION,
+    SENSOR_DAILY_AVERAGE_CONSUMPTION,
+    SENSOR_BILLING_READ,
+    SENSOR_CURRENT_CYCLE_TOTAL,
     UPDATE_INTERVAL,
     MANUFACTURER,
     MODEL,
@@ -49,6 +53,10 @@ async def async_setup_entry(
     
     entities = [
         WaterscopeLCDReadSensor(coordinator, config_entry),
+        WaterscopePreviousDayConsumptionSensor(coordinator, config_entry),
+        WaterscopeDailyAverageConsumptionSensor(coordinator, config_entry),
+        WaterscopeBillingReadSensor(coordinator, config_entry),
+        WaterscopeCurrentCycleTotalSensor(coordinator, config_entry),
     ]
     _LOGGER.debug("Created %s sensor entities", len(entities))
     
@@ -116,6 +124,10 @@ class WaterscopeDataCoordinator(DataUpdateCoordinator):
                 
                 result = {
                     SENSOR_LCD_READ: meter_value,
+                    SENSOR_PREVIOUS_DAY_CONSUMPTION: data.get('previous_day_consumption'),
+                    SENSOR_DAILY_AVERAGE_CONSUMPTION: data.get('daily_average_consumption'),
+                    SENSOR_BILLING_READ: data.get('billing_read'),
+                    SENSOR_CURRENT_CYCLE_TOTAL: data.get('current_cycle_total'),
                     'raw_data': data,
                     'data_source': 'unified_api'
                 }
@@ -146,11 +158,19 @@ class WaterscopeSensorBase(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> Dict[str, Any]:
         """Return device information about this Waterscope device."""
+        # Get device model from coordinator data if available
+        device_model = MODEL  # Default fallback
+        if self.coordinator.data and self.coordinator.data.get('raw_data'):
+            raw_data = self.coordinator.data['raw_data']
+            extracted_model = raw_data.get('device_model')
+            if extracted_model:
+                device_model = extracted_model
+        
         return {
             "identifiers": {(DOMAIN, self._config_entry.entry_id)},
             "name": DEFAULT_NAME,
             "manufacturer": MANUFACTURER,
-            "model": MODEL,
+            "model": device_model,
             "sw_version": "0.0.1",
         }
 
@@ -201,6 +221,186 @@ class WaterscopeLCDReadSensor(WaterscopeSensorBase):
             if self.coordinator.data.get('raw_data'):
                 raw_data = self.coordinator.data['raw_data']
                 attributes["raw_meter_text"] = raw_data.get('raw_meter_text')
+                attributes["api_status"] = raw_data.get('status')
+        
+        return attributes
+
+
+class WaterscopePreviousDayConsumptionSensor(WaterscopeSensorBase):
+    """Representation of previous day water consumption sensor."""
+
+    def __init__(
+        self,
+        coordinator: WaterscopeDataCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the previous day consumption sensor."""
+        super().__init__(coordinator, config_entry, SENSOR_PREVIOUS_DAY_CONSUMPTION)
+        self._attr_name = "Previous Day Consumption"
+        self._attr_native_unit_of_measurement = "ft³"
+        self._attr_device_class = SensorDeviceClass.WATER
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_icon = "mdi:water"
+
+    @property
+    def native_value(self) -> Optional[float]:
+        """Return the native value of the sensor."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get(SENSOR_PREVIOUS_DAY_CONSUMPTION)
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return the state attributes."""
+        attributes = {
+            "integration": DOMAIN,
+            "last_updated": getattr(self.coordinator, 'last_update_success_time', None),
+            "description": "Previous day water consumption from dashboard",
+        }
+        
+        if self.coordinator.data:
+            # Add data source information
+            data_source = self.coordinator.data.get('data_source', 'unknown')
+            attributes["data_source"] = data_source
+            
+            # Add raw data information
+            if self.coordinator.data.get('raw_data'):
+                raw_data = self.coordinator.data['raw_data']
+                attributes["api_status"] = raw_data.get('status')
+        
+        return attributes
+
+
+class WaterscopeBillingReadSensor(WaterscopeSensorBase):
+    """Representation of billing read sensor."""
+
+    def __init__(
+        self,
+        coordinator: WaterscopeDataCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the billing read sensor."""
+        super().__init__(coordinator, config_entry, SENSOR_BILLING_READ)
+        self._attr_name = "Billing Read"
+        self._attr_native_unit_of_measurement = None
+        self._attr_device_class = None
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_icon = "mdi:counter"
+
+    @property
+    def native_value(self) -> Optional[float]:
+        """Return the native value of the sensor."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get(SENSOR_BILLING_READ)
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return the state attributes."""
+        attributes = {
+            "integration": DOMAIN,
+            "last_updated": getattr(self.coordinator, 'last_update_success_time', None),
+            "description": "Billing read from dashboard",
+        }
+        
+        if self.coordinator.data:
+            # Add data source information
+            data_source = self.coordinator.data.get('data_source', 'unknown')
+            attributes["data_source"] = data_source
+            
+            # Add raw data information
+            if self.coordinator.data.get('raw_data'):
+                raw_data = self.coordinator.data['raw_data']
+                attributes["api_status"] = raw_data.get('status')
+        
+        return attributes
+
+
+class WaterscopeCurrentCycleTotalSensor(WaterscopeSensorBase):
+    """Representation of current cycle total sensor."""
+
+    def __init__(
+        self,
+        coordinator: WaterscopeDataCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the current cycle total sensor."""
+        super().__init__(coordinator, config_entry, SENSOR_CURRENT_CYCLE_TOTAL)
+        self._attr_name = "Current Cycle Total"
+        self._attr_native_unit_of_measurement = "ft³"
+        self._attr_device_class = SensorDeviceClass.WATER
+        self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        self._attr_icon = "mdi:water"
+
+    @property
+    def native_value(self) -> Optional[float]:
+        """Return the native value of the sensor."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get(SENSOR_CURRENT_CYCLE_TOTAL)
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return the state attributes."""
+        attributes = {
+            "integration": DOMAIN,
+            "last_updated": getattr(self.coordinator, 'last_update_success_time', None),
+            "description": "Current cycle total consumption from dashboard",
+        }
+        
+        if self.coordinator.data:
+            # Add data source information
+            data_source = self.coordinator.data.get('data_source', 'unknown')
+            attributes["data_source"] = data_source
+            
+            # Add raw data information
+            if self.coordinator.data.get('raw_data'):
+                raw_data = self.coordinator.data['raw_data']
+                attributes["api_status"] = raw_data.get('status')
+        
+        return attributes
+
+
+class WaterscopeDailyAverageConsumptionSensor(WaterscopeSensorBase):
+    """Representation of daily average water consumption sensor."""
+
+    def __init__(
+        self,
+        coordinator: WaterscopeDataCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the daily average consumption sensor."""
+        super().__init__(coordinator, config_entry, SENSOR_DAILY_AVERAGE_CONSUMPTION)
+        self._attr_name = "Daily Average Consumption"
+        self._attr_native_unit_of_measurement = "ft³"
+        self._attr_device_class = SensorDeviceClass.WATER
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_icon = "mdi:water"
+
+    @property
+    def native_value(self) -> Optional[float]:
+        """Return the native value of the sensor."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get(SENSOR_DAILY_AVERAGE_CONSUMPTION)
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return the state attributes."""
+        attributes = {
+            "integration": DOMAIN,
+            "last_updated": getattr(self.coordinator, 'last_update_success_time', None),
+            "description": "Daily average water consumption from dashboard",
+        }
+        
+        if self.coordinator.data:
+            # Add data source information
+            data_source = self.coordinator.data.get('data_source', 'unknown')
+            attributes["data_source"] = data_source
+            
+            # Add raw data information
+            if self.coordinator.data.get('raw_data'):
+                raw_data = self.coordinator.data['raw_data']
                 attributes["api_status"] = raw_data.get('status')
         
         return attributes

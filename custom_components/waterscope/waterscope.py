@@ -757,12 +757,236 @@ class WaterscopeAPI:
         try:
             _LOGGER.debug("🔄 Starting meter reading extraction for user: %s", username[:3] + "***")
             
+            # Get all meter data
+            meter_data = await self.get_meter_data(username, password)
+            
+            # Return just the LCD meter reading for backward compatibility
+            if meter_data and 'meter_reading' in meter_data:
+                return str(meter_data['meter_reading'])
+            
+            return None
+        
+        except Exception as e:
+            _LOGGER.error("Failed to get meter reading: %s", str(e), exc_info=True)
+            raise WaterscopeAPIError(f"Meter reading extraction failed: {e}") from e
+    
+    def _extract_meter_data(self, html_content: str) -> Dict[str, Optional[str]]:
+        """Extract all meter data from dashboard HTML."""
+        try:
+            _LOGGER.debug("🔍 Extracting meter data from dashboard HTML...")
+            _LOGGER.debug("HTML content length: %s characters", len(html_content))
+            
+            # Log first 2000 characters of HTML for debugging
+            _LOGGER.info("🔍 HTML SAMPLE (first 2000 chars): %s", html_content[:2000])
+            
+            # Check if we have the expected dashboard elements
+            if 'lcd-read_NEW' in html_content:
+                _LOGGER.info("✅ Found 'lcd-read_NEW' in HTML content")
+            else:
+                _LOGGER.warning("❌ 'lcd-read_NEW' NOT found in HTML content")
+            
+            if 'Consumer/Consumer/Index' in html_content or 'Consumer Portal' in html_content:
+                _LOGGER.info("✅ Appears to be dashboard page")
+            else:
+                _LOGGER.warning("❌ Does not appear to be dashboard page")
+            
+            # Parse HTML with BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Initialize result dictionary
+            result = {
+                'meter_reading': None,
+                'previous_day_consumption': None,
+                'daily_average_consumption': None,
+                'billing_read': None,
+                'current_cycle_total': None,
+                'device_model': None
+            }
+            
+            # Extract LCD meter reading (existing functionality)
+            meter_reading = self._extract_lcd_reading(soup, html_content)
+            if meter_reading:
+                result['meter_reading'] = meter_reading
+            
+            # Extract previous day consumption by finding the "Water Consumption" label
+            consumption_labels = soup.find_all('label', class_='src-int_lbl-extended')
+            for label in consumption_labels:
+                label_text = label.get_text(strip=True)
+                if 'Water' in label_text and 'Consumption' in label_text:
+                    # Found the Water Consumption label, now find the associated value
+                    # Look for the parent div and then find the span with the numeric value
+                    parent_div = label.find_parent('div', class_='src-int_wrp-extended')
+                    if parent_div:
+                        # Look for spans with numeric content within this div
+                        value_spans = parent_div.find_all('span')
+                        for span in value_spans:
+                            span_text = span.get_text(strip=True)
+                            # Look for numeric patterns (e.g., "16.81")
+                            numeric_match = re.search(r'^(\d+(?:\.\d+)?)$', span_text)
+                            if numeric_match:
+                                result['previous_day_consumption'] = numeric_match.group(1)
+                                _LOGGER.info("✅ Found previous day consumption: %s", result['previous_day_consumption'])
+                                break
+                    break
+            
+            # Extract daily average consumption by finding the "Daily Average" label
+            # Since the span id "last24HrUsage" is used multiple times, we need to find it by the label
+            daily_avg_labels = soup.find_all('label', class_='src-int_lbl-extended')
+            for label in daily_avg_labels:
+                label_text = label.get_text(strip=True)
+                if 'Daily' in label_text and 'Average' in label_text:
+                    # Found the Daily Average label, now find the associated value
+                    # Look for the parent div and then find the span with the numeric value
+                    parent_div = label.find_parent('div', class_='src-int_wrp-extended')
+                    if parent_div:
+                        # Look for spans with numeric content within this div
+                        value_spans = parent_div.find_all('span')
+                        for span in value_spans:
+                            span_text = span.get_text(strip=True)
+                            # Look for numeric patterns (e.g., "12.53")
+                            numeric_match = re.search(r'^(\d+(?:\.\d+)?)$', span_text)
+                            if numeric_match:
+                                result['daily_average_consumption'] = numeric_match.group(1)
+                                _LOGGER.info("✅ Found daily average consumption: %s", result['daily_average_consumption'])
+                                break
+                    break
+            
+            # Extract billing read from span with id "billing-read_NEW"
+            billing_read_element = soup.find('span', {'id': 'billing-read_NEW'})
+            if billing_read_element:
+                billing_read_text = billing_read_element.get_text(strip=True)
+                if billing_read_text and billing_read_text != 'NA':
+                    # Extract numeric value (remove any units or extra text)
+                    numeric_match = re.search(r'(\d+(?:\.\d+)?)', billing_read_text)
+                    if numeric_match:
+                        result['billing_read'] = numeric_match.group(1)
+                        _LOGGER.info("✅ Found billing read: %s", result['billing_read'])
+            
+            # Extract current cycle total by finding the "So far this cycle" label
+            cycle_labels = soup.find_all('label', class_='src-int_lbl-extended')
+            for label in cycle_labels:
+                label_text = label.get_text(strip=True)
+                if 'So far this' in label_text and 'cycle' in label_text:
+                    # Found the "So far this cycle" label, now find the associated value
+                    # Look for the parent div and then find the span with the numeric value
+                    parent_div = label.find_parent('div', class_='src-int_wrp-extended')
+                    if parent_div:
+                        # Look for spans with numeric content within this div
+                        value_spans = parent_div.find_all('span')
+                        for span in value_spans:
+                            span_text = span.get_text(strip=True)
+                            # Look for numeric patterns (e.g., "213")
+                            numeric_match = re.search(r'^(\d+(?:\.\d+)?)$', span_text)
+                            if numeric_match:
+                                result['current_cycle_total'] = numeric_match.group(1)
+                                _LOGGER.info("✅ Found current cycle total: %s", result['current_cycle_total'])
+                                break
+                    break
+            
+            _LOGGER.debug("Extracted meter data: %s", result)
+            return result
+            
+        except Exception as e:
+            _LOGGER.error("Error extracting meter data: %s", str(e), exc_info=True)
+            return {
+                'meter_reading': None,
+                'previous_day_consumption': None,
+                'daily_average_consumption': None,
+                'billing_read': None,
+                'current_cycle_total': None,
+                'device_model': None
+            }
+    
+    def _extract_lcd_reading(self, soup: BeautifulSoup, html_content: str) -> Optional[str]:
+        """Extract LCD meter reading from dashboard HTML."""
+        try:
+            # Method 1: Look for specific meter reading elements from actual HTML structure
+            _LOGGER.debug("Method 1: Looking for meter reading elements by ID...")
+            selectors = [
+                '#lcd-read_NEW',           # Primary meter reading element
+                '#lcd-read_NEW_1',         # Secondary meter reading element
+                'span[id="lcd-read_NEW"]',
+                'span[id="lcd-read_NEW_1"]'
+            ]
+            
+            for selector in selectors:
+                element = soup.select_one(selector)
+                if element:
+                    text = element.get_text(strip=True)
+                    if text and text != 'NA' and '.' in text:
+                        _LOGGER.info("✅ Found meter reading using selector '%s': %s", selector, text)
+                        return text
+                    _LOGGER.debug("Found element with selector '%s' but text was: '%s'", selector, text)
+            
+            # Method 2: Pattern matching for meter reading format (XXXXXX.XX)
+            _LOGGER.debug("Method 2: Pattern matching for meter reading format...")
+            # Look for patterns like "006456.29" (6 digits, dot, 2 digits)
+            pattern = r'\b\d{6}\.\d{2}\b'
+            matches = re.findall(pattern, html_content)
+            if matches:
+                # Filter out any obviously non-meter values (like coordinates, etc.)
+                for match in matches:
+                    # Meter readings are typically positive numbers < 999999
+                    try:
+                        value = float(match)
+                        if 0 < value < 999999:
+                            _LOGGER.info("✅ Found meter reading using pattern matching: %s", match)
+                            return match
+                    except ValueError:
+                        continue
+            
+            # Method 3: Search around "LCD Read" text in HTML
+            _LOGGER.debug("Method 3: Searching around 'LCD Read' text...")
+            lcd_pattern = r'LCD Read[^0-9]*(\d+(?:\.\d+)?)\s*Ft3'
+            match = re.search(lcd_pattern, html_content, re.IGNORECASE)
+            if match:
+                value = match.group(1)
+                _LOGGER.info("✅ Found meter reading around 'LCD Read' text: %s", value)
+                return value
+            
+            # Method 4: Look for elements containing "LCD Read"
+            _LOGGER.debug("Method 4: Searching elements containing 'LCD Read'...")
+            lcd_elements = soup.find_all(string=re.compile(r'LCD Read', re.IGNORECASE))
+            _LOGGER.debug("Found %s elements containing 'LCD Read'", len(lcd_elements))
+            
+            for i, element in enumerate(lcd_elements):
+                _LOGGER.debug("Processing LCD element %s", i)
+                parent = element.parent if element.parent else element
+                # Search within parent and siblings for numeric values
+                parent_text = parent.get_text() if hasattr(parent, 'get_text') else str(parent)
+                _LOGGER.debug("Parent text: %s", parent_text[:100] + "..." if len(parent_text) > 100 else parent_text)
+                
+                # Look for numeric patterns in the parent text
+                numeric_pattern = r'(\d+(?:\.\d+)?)'
+                numbers = re.findall(numeric_pattern, parent_text)
+                for number in numbers:
+                    try:
+                        value = float(number)
+                        # Meter readings are reasonable water meter values
+                        if 0 < value < 999999 and '.' in number:
+                            _LOGGER.info("✅ Found meter reading in parent element: %s", number)
+                            return number
+                    except ValueError:
+                        continue
+
+            _LOGGER.warning("❌ Could not extract meter reading using any method")
+            return None
+            
+        except Exception as e:
+            _LOGGER.error("Error extracting LCD meter reading: %s", str(e), exc_info=True)
+            return None
+    
+    async def get_meter_data(self, username: str, password: str) -> Dict[str, Any]:
+        """Get complete meter data including reading and additional consumption values."""
+        try:
+            _LOGGER.debug("🔄 Getting complete dashboard data for user: %s", username[:3] + "***")
+            
             # Step 1: Authenticate if not already authenticated
             if not self.authenticated:
                 _LOGGER.debug("Step 1: Authenticating...")
                 auth_result = await self.authenticate(username, password)
                 if not auth_result:
-                    _LOGGER.error("❌ Authentication failed for meter reading extraction")
+                    _LOGGER.error("❌ Authentication failed for meter data extraction")
                     raise WaterscopeAuthError("Authentication failed")
                 
                 _LOGGER.debug("✅ Authentication successful, using hybrid approach for dashboard access...")
@@ -855,150 +1079,94 @@ class WaterscopeAPI:
             _LOGGER.debug("Retrieved dashboard HTML (%s characters)", len(html_content))
             
             # Log full HTML content for debugging
-            _LOGGER.info("🔍 DASHBOARD HTML CONTENT (for debugging meter reading extraction):")
+            _LOGGER.info("🔍 DASHBOARD HTML CONTENT (for debugging meter data extraction):")
             _LOGGER.info("=" * 80)
             _LOGGER.info(html_content)
             _LOGGER.info("=" * 80)
             
-            # Step 3: Parse HTML and extract meter reading
-            _LOGGER.debug("Step 3: Parsing HTML and extracting meter reading...")
-            meter_value = self._extract_meter_reading(html_content)
-            _LOGGER.debug("Meter reading extraction result: %s", meter_value)
+            # Step 3: Parse HTML and extract all meter data
+            _LOGGER.debug("Step 3: Parsing HTML and extracting all meter data...")
+            meter_data = self._extract_meter_data(html_content)
+            _LOGGER.debug("Meter data extraction result: %s", meter_data)
             
-            return meter_value
-        
-        except Exception as e:
-            _LOGGER.error("Failed to get meter reading: %s", str(e), exc_info=True)
-            raise WaterscopeAPIError(f"Meter reading extraction failed: {e}") from e
-    
-    def _extract_meter_reading(self, html_content: str) -> Optional[str]:
-        """Extract meter reading from dashboard HTML."""
-        try:
-            _LOGGER.debug("🔍 Extracting meter reading from dashboard HTML...")
-            _LOGGER.debug("HTML content length: %s characters", len(html_content))
-            
-            # Log first 2000 characters of HTML for debugging
-            _LOGGER.info("🔍 HTML SAMPLE (first 2000 chars): %s", html_content[:2000])
-            
-            # Check if we have the expected dashboard elements
-            if 'lcd-read_NEW' in html_content:
-                _LOGGER.info("✅ Found 'lcd-read_NEW' in HTML content")
-            else:
-                _LOGGER.warning("❌ 'lcd-read_NEW' NOT found in HTML content")
-            
-            if 'Consumer/Consumer/Index' in html_content or 'Consumer Portal' in html_content:
-                _LOGGER.info("✅ Appears to be dashboard page")
-            else:
-                _LOGGER.warning("❌ Does not appear to be dashboard page")
-            
-            # Parse HTML with BeautifulSoup
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            # Method 1: Look for specific meter reading elements from actual HTML structure
-            _LOGGER.debug("Method 1: Looking for meter reading elements by ID...")
-            selectors = [
-                '#lcd-read_NEW',           # Primary meter reading element
-                '#lcd-read_NEW_1',         # Secondary meter reading element
-                'span[id="lcd-read_NEW"]',
-                'span[id="lcd-read_NEW_1"]'
-            ]
-            
-            for selector in selectors:
-                element = soup.select_one(selector)
-                if element:
-                    text = element.get_text(strip=True)
-                    if text and text != 'NA' and '.' in text:
-                        _LOGGER.info("✅ Found meter reading using selector '%s': %s", selector, text)
-                        return text
-                    _LOGGER.debug("Found element with selector '%s' but text was: '%s'", selector, text)
-            
-            # Method 2: Pattern matching for meter reading format (XXXXXX.XX)
-            _LOGGER.debug("Method 2: Pattern matching for meter reading format...")
-            # Look for patterns like "006456.29" (6 digits, dot, 2 digits)
-            pattern = r'\b\d{6}\.\d{2}\b'
-            matches = re.findall(pattern, html_content)
-            if matches:
-                # Filter out any obviously non-meter values (like coordinates, etc.)
-                for match in matches:
-                    # Meter readings are typically positive numbers < 999999
-                    try:
-                        value = float(match)
-                        if 0 < value < 999999:
-                            _LOGGER.info("✅ Found meter reading using pattern matching: %s", match)
-                            return match
-                    except ValueError:
-                        continue
-            
-            # Method 3: Search around "LCD Read" text in HTML
-            _LOGGER.debug("Method 3: Searching around 'LCD Read' text...")
-            lcd_pattern = r'LCD Read[^0-9]*(\d+(?:\.\d+)?)\s*Ft3'
-            match = re.search(lcd_pattern, html_content, re.IGNORECASE)
-            if match:
-                value = match.group(1)
-                _LOGGER.info("✅ Found meter reading around 'LCD Read' text: %s", value)
-                return value
-            
-            # Method 4: Look for elements containing "LCD Read"
-            _LOGGER.debug("Method 4: Searching elements containing 'LCD Read'...")
-            lcd_elements = soup.find_all(string=re.compile(r'LCD Read', re.IGNORECASE))
-            _LOGGER.debug("Found %s elements containing 'LCD Read'", len(lcd_elements))
-            
-            for i, element in enumerate(lcd_elements):
-                _LOGGER.debug("Processing LCD element %s", i)
-                parent = element.parent if element.parent else element
-                # Search within parent and siblings for numeric values
-                parent_text = parent.get_text() if hasattr(parent, 'get_text') else str(parent)
-                _LOGGER.debug("Parent text: %s", parent_text[:100] + "..." if len(parent_text) > 100 else parent_text)
-                
-                # Look for numeric patterns in the parent text
-                numeric_pattern = r'(\d+(?:\.\d+)?)'
-                numbers = re.findall(numeric_pattern, parent_text)
-                for number in numbers:
-                    try:
-                        value = float(number)
-                        # Meter readings are reasonable water meter values
-                        if 0 < value < 999999 and '.' in number:
-                            _LOGGER.info("✅ Found meter reading in parent element: %s", number)
-                            return number
-                    except ValueError:
-                        continue
-
-            _LOGGER.warning("❌ Could not extract meter reading using any method")
-            return None
-            
-        except Exception as e:
-            _LOGGER.error("Error extracting meter reading: %s", str(e), exc_info=True)
-            return None
-    
-    async def get_meter_data(self, username: str, password: str) -> Dict[str, Any]:
-        """Get complete meter data including reading."""
-        try:
-            _LOGGER.debug("🔄 Getting complete dashboard data for user: %s", username[:3] + "***")
-            
-            meter_value = await self.get_meter_reading(username, password)
-            
-            if meter_value is None:
-                _LOGGER.error("❌ No meter reading found in dashboard")
-                raise WaterscopeAPIError("No meter reading found")
-            
-            _LOGGER.debug("Raw meter value extracted: %s", meter_value)
-            
-            # Convert to float for Home Assistant
-            try:
-                numeric_value = float(meter_value)
-                _LOGGER.debug("Converted meter value to float: %s", numeric_value)
-            except ValueError as ve:
-                _LOGGER.error("❌ Invalid meter reading format: %s", meter_value)
-                raise WaterscopeAPIError(f"Invalid meter reading format: {meter_value}") from ve
-            
+            # Validate and prepare final result
             result = {
-                'meter_reading': numeric_value,
-                'raw_meter_text': f"{meter_value} Ft3",
                 'status': 'success',
                 'timestamp': None  # Will be set by coordinator
             }
             
-            _LOGGER.info("✅ Dashboard data retrieval successful: Meter reading = %s Ft3", meter_value)
+            # Process LCD meter reading
+            if meter_data.get('meter_reading'):
+                try:
+                    numeric_value = float(meter_data['meter_reading'])
+                    result['meter_reading'] = numeric_value
+                    result['raw_meter_text'] = f"{meter_data['meter_reading']} Ft3"
+                    _LOGGER.info("✅ LCD meter reading: %s Ft3", meter_data['meter_reading'])
+                except ValueError as ve:
+                    _LOGGER.error("❌ Invalid meter reading format: %s", meter_data['meter_reading'])
+                    raise WaterscopeAPIError(f"Invalid meter reading format: {meter_data['meter_reading']}") from ve
+            else:
+                _LOGGER.error("❌ No LCD meter reading found in dashboard")
+                raise WaterscopeAPIError("No LCD meter reading found")
+            
+            # Process previous day consumption
+            if meter_data.get('previous_day_consumption'):
+                try:
+                    numeric_value = float(meter_data['previous_day_consumption'])
+                    result['previous_day_consumption'] = numeric_value
+                    _LOGGER.info("✅ Previous day consumption: %s ft3", meter_data['previous_day_consumption'])
+                except ValueError:
+                    _LOGGER.warning("❌ Invalid previous day consumption format: %s", meter_data['previous_day_consumption'])
+                    result['previous_day_consumption'] = None
+            else:
+                _LOGGER.warning("❌ No previous day consumption found in dashboard")
+                result['previous_day_consumption'] = None
+            
+            # Process daily average consumption
+            if meter_data.get('daily_average_consumption'):
+                try:
+                    numeric_value = float(meter_data['daily_average_consumption'])
+                    result['daily_average_consumption'] = numeric_value
+                    _LOGGER.info("✅ Daily average consumption: %s ft3", meter_data['daily_average_consumption'])
+                except ValueError:
+                    _LOGGER.warning("❌ Invalid daily average consumption format: %s", meter_data['daily_average_consumption'])
+                    result['daily_average_consumption'] = None
+            else:
+                _LOGGER.warning("❌ No daily average consumption found in dashboard")
+                result['daily_average_consumption'] = None
+            
+            # Process billing read
+            if meter_data.get('billing_read'):
+                try:
+                    numeric_value = float(meter_data['billing_read'])
+                    result['billing_read'] = numeric_value
+                    _LOGGER.info("✅ Billing read: %s ft3", meter_data['billing_read'])
+                except ValueError:
+                    _LOGGER.warning("❌ Invalid billing read format: %s", meter_data['billing_read'])
+                    result['billing_read'] = None
+            else:
+                _LOGGER.warning("❌ No billing read found in dashboard")
+                result['billing_read'] = None
+            
+            # Process current cycle total
+            if meter_data.get('current_cycle_total'):
+                try:
+                    numeric_value = float(meter_data['current_cycle_total'])
+                    result['current_cycle_total'] = numeric_value
+                    _LOGGER.info("✅ Current cycle total: %s ft3", meter_data['current_cycle_total'])
+                except ValueError:
+                    _LOGGER.warning("❌ Invalid current cycle total format: %s", meter_data['current_cycle_total'])
+                    result['current_cycle_total'] = None
+            else:
+                _LOGGER.warning("❌ No current cycle total found in dashboard")
+                result['current_cycle_total'] = None
+            
+            # Add device model to the result if extracted
+            if meter_data.get('device_model'):
+                result['device_model'] = meter_data['device_model']
+                _LOGGER.info("✅ Device model extracted: %s", meter_data['device_model'])
+            
+            _LOGGER.info("✅ Dashboard data retrieval successful")
             return result
             
         except Exception as e:

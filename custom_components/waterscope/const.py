@@ -17,10 +17,11 @@ DASHBOARD_URL = f"{BASE_URL}/Dashboard"
 UPDATE_INTERVAL = 86400  # 24 hours (daily) in seconds
 
 # Sensor types
-SENSOR_CYCLE_USAGE = "cycle_usage"
-SENSOR_CURRENT_READING = "current_reading"
-SENSOR_DAILY_USAGE = "daily_usage"
 SENSOR_LCD_READ = "lcd_read"
+SENSOR_PREVIOUS_DAY_CONSUMPTION = "previous_day_consumption"
+SENSOR_DAILY_AVERAGE_CONSUMPTION = "daily_average_consumption"
+SENSOR_BILLING_READ = "billing_read"
+SENSOR_CURRENT_CYCLE_TOTAL = "current_cycle_total"
 
 # Device info
 MANUFACTURER = "Waterscope"
