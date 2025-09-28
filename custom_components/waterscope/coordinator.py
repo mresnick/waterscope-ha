@@ -18,7 +18,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.helpers.event import async_track_time_change
 
-from .waterscope import WaterscopeAPI
+from .water_meter import WaterscopeAPI
 from .const import (
     DOMAIN,
     DEFAULT_NAME,
@@ -27,11 +27,14 @@ from .const import (
     SENSOR_DAILY_AVERAGE_CONSUMPTION,
     SENSOR_BILLING_READ,
     SENSOR_CURRENT_CYCLE_TOTAL,
-    UPDATE_INTERVAL,
     MANUFACTURER,
     MODEL,
     WaterscopeError,
     WaterscopeAPIError,
+    CONF_POLL_FREQUENCY,
+    CONF_POLL_TIME_OFFSET,
+    DEFAULT_POLL_FREQUENCY,
+    DEFAULT_POLL_TIME_OFFSET,
 )
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
 
@@ -72,31 +75,81 @@ class WaterscopeDataCoordinator(DataUpdateCoordinator):
         """Initialize the data coordinator."""
         self.config_entry = config_entry
         self._hass = hass
+        
+        # Get poll frequency from options (with backward compatibility)
+        poll_frequency_minutes = self._get_poll_frequency()
+        poll_interval_seconds = poll_frequency_minutes * 60
+        
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),  # Keep as fallback
+            update_interval=timedelta(seconds=poll_interval_seconds),
         )
         
-        # Schedule daily updates at 2:00 AM local time
+        # Schedule updates at configured time offset
         self._schedule_daily_update()
         
+    def _get_poll_frequency(self) -> int:
+        """Get poll frequency from configuration with backward compatibility."""
+        # Check options first (new way)
+        if hasattr(self.config_entry, 'options') and self.config_entry.options:
+            poll_frequency = self.config_entry.options.get(CONF_POLL_FREQUENCY)
+            if poll_frequency is not None:
+                return poll_frequency
+        
+        # Fallback to default for backward compatibility
+        return DEFAULT_POLL_FREQUENCY
+    
+    def _get_poll_time_offset(self) -> int:
+        """Get poll time offset from configuration with backward compatibility."""
+        # Check options first (new way)
+        if hasattr(self.config_entry, 'options') and self.config_entry.options:
+            time_offset = self.config_entry.options.get(CONF_POLL_TIME_OFFSET)
+            if time_offset is not None:
+                return time_offset
+        
+        # Fallback to default for backward compatibility
+        return DEFAULT_POLL_TIME_OFFSET
+    
     def _schedule_daily_update(self) -> None:
-        """Schedule daily updates at 2:00 AM local time."""
-        _LOGGER.info("📅 Scheduling daily updates at 2:00 AM local time (with 24h fallback)")
+        """Schedule updates at configured time offset."""
+        time_offset_minutes = self._get_poll_time_offset()
+        hour = time_offset_minutes // 60
+        minute = time_offset_minutes % 60
+        
+        _LOGGER.info("📅 Scheduling daily updates at %02d:%02d local time (with %d minute interval fallback)",
+                     hour, minute, self._get_poll_frequency())
         async_track_time_change(
             self._hass,
             self._scheduled_update,
-            hour=2,
-            minute=0,
+            hour=hour,
+            minute=minute,
             second=0
         )
         
     async def _scheduled_update(self, now) -> None:
-        """Triggered update at scheduled time (2:00 AM)."""
-        _LOGGER.info("⏰ Scheduled update triggered at 2:00 AM")
+        """Triggered update at scheduled time."""
+        time_offset_minutes = self._get_poll_time_offset()
+        hour = time_offset_minutes // 60
+        minute = time_offset_minutes % 60
+        _LOGGER.info("⏰ Scheduled update triggered at %02d:%02d", hour, minute)
         await self.async_request_refresh()
+    
+    async def async_config_entry_updated(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Handle config entry options update."""
+        _LOGGER.info("🔄 Configuration updated, applying new poll settings...")
+        
+        # Update poll frequency
+        poll_frequency_minutes = self._get_poll_frequency()
+        poll_interval_seconds = poll_frequency_minutes * 60
+        self.update_interval = timedelta(seconds=poll_interval_seconds)
+        
+        _LOGGER.info("Updated poll frequency to %d minutes", poll_frequency_minutes)
+        
+        # Note: Scheduled time updates would require restart for simplicity
+        # The async_track_time_change doesn't have an easy way to update existing schedules
+        _LOGGER.info("Time offset changes require integration reload to take effect")
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Update data via dashboard API."""
@@ -158,20 +211,19 @@ class WaterscopeSensorBase(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> Dict[str, Any]:
         """Return device information about this Waterscope device."""
-        # Get device model from coordinator data if available
-        device_model = MODEL  # Default fallback
+        # Get device name from coordinator data if available
+        device_name = DEFAULT_NAME  # Default fallback
+        
         if self.coordinator.data and self.coordinator.data.get('raw_data'):
             raw_data = self.coordinator.data['raw_data']
-            extracted_model = raw_data.get('device_model')
-            if extracted_model:
-                device_model = extracted_model
+            extracted_device_name = raw_data.get('device_name')
+            if extracted_device_name:
+                device_name = extracted_device_name
         
         return {
             "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": DEFAULT_NAME,
-            "manufacturer": MANUFACTURER,
-            "model": device_model,
-            "sw_version": "0.0.1",
+            "name": device_name,
+            "manufacturer": MANUFACTURER
         }
 
     @property

@@ -1,7 +1,5 @@
 """The Waterscope integration."""
-import asyncio
 import logging
-from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -9,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import DOMAIN
-from .sensor import WaterscopeDataCoordinator
+from .coordinator import WaterscopeDataCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,9 +44,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Set up platforms
     _LOGGER.debug("Setting up platforms: %s", PLATFORMS)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    
+    # Set up options update listener
+    entry.async_on_unload(entry.add_update_listener(async_update_options))
     _LOGGER.info("✅ Waterscope integration setup complete")
 
     return True
+
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Update options."""
+    _LOGGER.info("🔄 Updating Waterscope configuration options...")
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    
+    # Update coordinator with new settings
+    if hasattr(coordinator, 'async_config_entry_updated'):
+        await coordinator.async_config_entry_updated(hass, entry)
+    
+    _LOGGER.info("✅ Configuration options updated successfully")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

@@ -14,6 +14,7 @@ import asyncio
 import getpass
 import sys
 import os
+import re
 from pathlib import Path
 
 # Setup logging
@@ -29,6 +30,7 @@ sys.path.insert(0, str(project_root / "custom_components" / "waterscope"))
 
 try:
     from waterscope import WaterscopeAPI, authenticate_and_get_cookies
+    from bs4 import BeautifulSoup
 except ImportError as e:
     print(f"❌ Import error: {e}")
     print("Attempting to handle missing const dependencies...")
@@ -103,10 +105,11 @@ class TestWaterscopeIntegration(unittest.TestCase):
         """
         Comprehensive test covering:
         1. Authentication & Session Management
-        2. Cookie Extraction & Validation  
+        2. Cookie Extraction & Validation
         3. Dashboard Navigation & Data Scraping
         4. Convenience Function Testing
         5. Error Handling with Invalid Credentials
+        6. Device Name Extraction from Dashboard HTML
         """
         print(f"\n🧪 Waterscope Complete Integration Test")
         print("=" * 50)
@@ -164,6 +167,19 @@ class TestWaterscopeIntegration(unittest.TestCase):
                 
                 print("✅ Dashboard navigation successful")
                 print(f"   Status: {meter_data.get('status', 'unknown')}")
+                
+                # Log the dashboard HTML for device name extraction debugging
+                dashboard_html = meter_data.get('raw_html')
+                if dashboard_html:
+                    print("\n" + "="*80)
+                    print("📄 COMPLETE DASHBOARD HTML OUTPUT:")
+                    print("="*80)
+                    print(dashboard_html)
+                    print("="*80)
+                    print("📄 END OF DASHBOARD HTML OUTPUT")
+                    print("="*80 + "\n")
+                else:
+                    print("⚠️ No raw HTML found in meter_data")
                 
                 # Validate primary meter reading (critical requirement)
                 meter_reading = meter_data.get('meter_reading')
@@ -237,6 +253,32 @@ class TestWaterscopeIntegration(unittest.TestCase):
                 print("   Error handling working correctly")
             
             # ================================================================
+            # PHASE 6: Device Name Extraction Validation
+            # ================================================================
+            print("\n📋 PHASE 6: Device Name Extraction Validation")
+            print("-" * 50)
+            
+            # Validate device name extraction
+            device_name = meter_data.get('device_name')
+            if device_name:
+                self.assertIsInstance(device_name, str, "Device name should be a string")
+                self.assertGreater(len(device_name), 0, "Device name should not be empty")
+                self.assertLess(len(device_name), 100, "Device name should be reasonably sized")
+                print(f"✅ Device name extracted successfully: '{device_name}'")
+                print("   ✅ Device name format and length validated")
+                print(f"   ✅ Device name length: {len(device_name)} characters")
+                
+                # Additional validation for device name content
+                if re.match(r'^[A-Za-z0-9\s\-_]+$', device_name):
+                    print("   ✅ Device name contains valid characters")
+                else:
+                    print("   ⚠️ Device name contains unexpected characters")
+            else:
+                print("⚠️ No device name found in dashboard")
+                print("   This is expected if the dashboard doesn't contain account/meter identifiers")
+                print("   Device name extraction is optional functionality")
+            
+            # ================================================================
             # EXTRACTED METRICS SUMMARY
             # ================================================================
             print(f"\n📊 Extracted Water Metrics:")
@@ -246,9 +288,11 @@ class TestWaterscopeIntegration(unittest.TestCase):
             if meter_data.get('daily_average_consumption') is not None:
                 print(f"   Daily Average: {meter_data.get('daily_average_consumption')} ft³")
             if meter_data.get('billing_read') is not None:
-                print(f"   Billing Read: {meter_data.get('billing_read')} ft³")
+                print(f"   Billing Read: {meter_data.get('billing_read')}")
             if meter_data.get('current_cycle_total') is not None:
                 print(f"   Cycle Total: {meter_data.get('current_cycle_total')} ft³")
+            if meter_data.get('device_name') is not None:
+                print(f"   Device Name: {meter_data.get('device_name')}")
             
         self.loop.run_until_complete(run_complete_test())
 

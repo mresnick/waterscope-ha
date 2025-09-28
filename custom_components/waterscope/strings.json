@@ -2,23 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "Choose Authentication Method",
-        "description": "Select how you want to authenticate with Waterscope",
-        "data": {
-          "use_cookies": "Use session cookies (fast but requires manual cookie extraction)"
-        }
-      },
-      "cookies": {
-        "title": "Cookie-based Authentication",
-        "description": "Login to Waterscope in your browser, then extract and paste your session cookies here. {instructions}",
-        "data": {
-          "session_cookies": "Session Cookies",
-          "csrf_token": "CSRF Token (optional)"
-        }
-      },
-      "password": {
-        "title": "Username/Password Authentication",
-        "description": "Enter your Waterscope login credentials.\n\nYour credentials will be used to automatically obtain session cookies through a secure HTTP authentication flow. This is the recommended method for most users.",
+        "title": "Waterscope Authentication",
+        "description": "Enter your Waterscope login credentials.\n\nYour credentials will be used to automatically obtain session cookies through a secure HTTP authentication flow.",
         "data": {
           "username": "Username/Email",
           "password": "Password"
@@ -37,8 +22,12 @@
   "options": {
     "step": {
       "init": {
-        "title": "Waterscope Options",
-        "description": "Configure options for your Waterscope integration."
+        "title": "Waterscope Configuration",
+        "description": "Configure polling frequency and timing for your Waterscope integration.\n\nNote: Time offset changes require an integration reload to take effect.",
+        "data": {
+          "poll_frequency": "Poll Frequency (minutes)",
+          "poll_time_offset": "Poll Time Offset (minutes from midnight)"
+        }
       }
     }
   }

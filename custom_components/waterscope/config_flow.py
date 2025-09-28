@@ -13,7 +13,13 @@ from .const import (
     DEFAULT_NAME,
     WaterscopeError,
     WaterscopeAPIError,
-    WaterscopeAuthError
+    WaterscopeAuthError,
+    CONF_POLL_FREQUENCY,
+    CONF_POLL_TIME_OFFSET,
+    DEFAULT_POLL_FREQUENCY,
+    MIN_POLL_FREQUENCY,
+    MAX_POLL_FREQUENCY,
+    DEFAULT_POLL_TIME_OFFSET
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -148,9 +154,31 @@ class WaterscopeOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        # For now, no options to configure
-        # Future options could include update interval, units, etc.
+        # Get current values or defaults
+        current_poll_frequency = self.config_entry.options.get(
+            CONF_POLL_FREQUENCY, DEFAULT_POLL_FREQUENCY
+        )
+        current_poll_time_offset = self.config_entry.options.get(
+            CONF_POLL_TIME_OFFSET, DEFAULT_POLL_TIME_OFFSET
+        )
+
+        # Schema for configuration options
+        options_schema = vol.Schema({
+            vol.Optional(
+                CONF_POLL_FREQUENCY,
+                default=current_poll_frequency
+            ): vol.All(vol.Coerce(int), vol.Range(min=MIN_POLL_FREQUENCY, max=MAX_POLL_FREQUENCY)),
+            vol.Optional(
+                CONF_POLL_TIME_OFFSET,
+                default=current_poll_time_offset
+            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=1439)),  # 0-1439 minutes (24 hours)
+        })
+
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({}),
+            data_schema=options_schema,
+            description_placeholders={
+                "poll_frequency_desc": f"How often to fetch data (minutes). Range: {MIN_POLL_FREQUENCY}-{MAX_POLL_FREQUENCY}",
+                "poll_time_offset_desc": "Time offset from midnight for scheduled updates (minutes). E.g., 120 = 2:00 AM"
+            }
         )

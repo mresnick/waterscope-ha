@@ -7,14 +7,11 @@ import re
 import logging
 import urllib.parse
 from typing import Optional, Dict, Any, Tuple
-from datetime import datetime, timezone
 import aiohttp
 import asyncio
 from bs4 import BeautifulSoup
-import json
 import requests
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # Handle both package and standalone imports
 try:
@@ -361,43 +358,11 @@ class WaterscopeAPI:
             if not csrf_token:
                 raise RuntimeError("Could not find CSRF token in cookies")
             
-            # Extract transaction state from URL or page - multiple approaches
+            # Extract transaction state from URL parameters
             tx_state = None
-            
-            # Method 1: From URL parameters
             url_params = urllib.parse.parse_qs(urllib.parse.urlparse(str(response.url)).query)
             if 'tx' in url_params:
                 tx_state = url_params['tx'][0]
-            
-            # Method 2: From state parameter (common in OAuth flows)
-            if not tx_state and 'state' in url_params:
-                tx_state = url_params['state'][0]
-            
-            # Method 3: Look for tx parameter in page content
-            if not tx_state:
-                tx_match = re.search(r'tx=([^&\s"\']+)', response_text)
-                if tx_match:
-                    tx_state = tx_match.group(1)
-            
-            # Method 4: Look for StateProperties in page content
-            if not tx_state:
-                state_match = re.search(r'StateProperties=([^&\s"\']+)', response_text)
-                if state_match:
-                    tx_state = state_match.group(1)
-            
-            # Method 5: Extract from form inputs
-            if not tx_state:
-                soup = BeautifulSoup(response_text, 'html.parser')
-                tx_input = soup.find('input', {'name': 'tx'})
-                if tx_input:
-                    tx_state = tx_input.get('value')
-            
-            # Method 6: Use state parameter as backup
-            if not tx_state and 'state' in url_params:
-                # Extract just the transaction part from the state
-                state_value = url_params['state'][0]
-                # Azure B2C often embeds transaction info in the state
-                tx_state = state_value
             
             _LOGGER.info(f"✅ Extracted CSRF token: {csrf_token[:10]}... and transaction state: {tx_state}")
             
@@ -727,7 +692,7 @@ class WaterscopeAPI:
             
             # Test access to authenticated page
             test_response = sync_session.get(
-                "https://waterscope.us/Consumer/Consumer/Index",
+                "https://waterscope.us/Consumer/Consumer/Index#ConsumerDashboard",
                 allow_redirects=False
             )
             
@@ -800,7 +765,7 @@ class WaterscopeAPI:
                 'daily_average_consumption': None,
                 'billing_read': None,
                 'current_cycle_total': None,
-                'device_model': None
+                'device_name': None
             }
             
             # Extract LCD meter reading (existing functionality)
@@ -883,6 +848,12 @@ class WaterscopeAPI:
                                 break
                     break
             
+            # Extract device/meter name - look for meter identifier or account name
+            device_name = self._extract_device_name(soup, html_content)
+            if device_name:
+                result['device_name'] = device_name
+                _LOGGER.info("✅ Found device name: %s", device_name)
+            
             _LOGGER.debug("Extracted meter data: %s", result)
             return result
             
@@ -894,86 +865,67 @@ class WaterscopeAPI:
                 'daily_average_consumption': None,
                 'billing_read': None,
                 'current_cycle_total': None,
-                'device_model': None
+                'device_name': None
             }
     
     def _extract_lcd_reading(self, soup: BeautifulSoup, html_content: str) -> Optional[str]:
         """Extract LCD meter reading from dashboard HTML."""
         try:
-            # Method 1: Look for specific meter reading elements from actual HTML structure
-            _LOGGER.debug("Method 1: Looking for meter reading elements by ID...")
-            selectors = [
-                '#lcd-read_NEW',           # Primary meter reading element
-                '#lcd-read_NEW_1',         # Secondary meter reading element
-                'span[id="lcd-read_NEW"]',
-                'span[id="lcd-read_NEW_1"]'
-            ]
+            # Use the lcd-read_NEW selector to find the LCD reading
+            element = soup.select_one('#lcd-read_NEW')
+            if element:
+                text = element.get_text(strip=True)
+                if text and text != 'NA' and '.' in text:
+                    _LOGGER.info("✅ Found meter reading: %s", text)
+                    return text
             
-            for selector in selectors:
-                element = soup.select_one(selector)
-                if element:
-                    text = element.get_text(strip=True)
-                    if text and text != 'NA' and '.' in text:
-                        _LOGGER.info("✅ Found meter reading using selector '%s': %s", selector, text)
-                        return text
-                    _LOGGER.debug("Found element with selector '%s' but text was: '%s'", selector, text)
-            
-            # Method 2: Pattern matching for meter reading format (XXXXXX.XX)
-            _LOGGER.debug("Method 2: Pattern matching for meter reading format...")
-            # Look for patterns like "006456.29" (6 digits, dot, 2 digits)
-            pattern = r'\b\d{6}\.\d{2}\b'
-            matches = re.findall(pattern, html_content)
-            if matches:
-                # Filter out any obviously non-meter values (like coordinates, etc.)
-                for match in matches:
-                    # Meter readings are typically positive numbers < 999999
-                    try:
-                        value = float(match)
-                        if 0 < value < 999999:
-                            _LOGGER.info("✅ Found meter reading using pattern matching: %s", match)
-                            return match
-                    except ValueError:
-                        continue
-            
-            # Method 3: Search around "LCD Read" text in HTML
-            _LOGGER.debug("Method 3: Searching around 'LCD Read' text...")
-            lcd_pattern = r'LCD Read[^0-9]*(\d+(?:\.\d+)?)\s*Ft3'
-            match = re.search(lcd_pattern, html_content, re.IGNORECASE)
-            if match:
-                value = match.group(1)
-                _LOGGER.info("✅ Found meter reading around 'LCD Read' text: %s", value)
-                return value
-            
-            # Method 4: Look for elements containing "LCD Read"
-            _LOGGER.debug("Method 4: Searching elements containing 'LCD Read'...")
-            lcd_elements = soup.find_all(string=re.compile(r'LCD Read', re.IGNORECASE))
-            _LOGGER.debug("Found %s elements containing 'LCD Read'", len(lcd_elements))
-            
-            for i, element in enumerate(lcd_elements):
-                _LOGGER.debug("Processing LCD element %s", i)
-                parent = element.parent if element.parent else element
-                # Search within parent and siblings for numeric values
-                parent_text = parent.get_text() if hasattr(parent, 'get_text') else str(parent)
-                _LOGGER.debug("Parent text: %s", parent_text[:100] + "..." if len(parent_text) > 100 else parent_text)
-                
-                # Look for numeric patterns in the parent text
-                numeric_pattern = r'(\d+(?:\.\d+)?)'
-                numbers = re.findall(numeric_pattern, parent_text)
-                for number in numbers:
-                    try:
-                        value = float(number)
-                        # Meter readings are reasonable water meter values
-                        if 0 < value < 999999 and '.' in number:
-                            _LOGGER.info("✅ Found meter reading in parent element: %s", number)
-                            return number
-                    except ValueError:
-                        continue
-
-            _LOGGER.warning("❌ Could not extract meter reading using any method")
+            _LOGGER.warning("❌ Could not extract meter reading")
             return None
             
         except Exception as e:
             _LOGGER.error("Error extracting LCD meter reading: %s", str(e), exc_info=True)
+            return None
+    
+    def _extract_device_name(self, soup: BeautifulSoup, html_content: str) -> Optional[str]:
+        """Extract device/meter name from dashboard HTML."""
+        try:
+            _LOGGER.info("🔍 Device name extraction: Starting HTML analysis")
+            
+            # Look for the meter information in the table structure
+            # Find table containing meter information
+            meter_table = soup.find('table', style=lambda value: value and 'font-size: 11px' in value)
+            if meter_table:
+                _LOGGER.info("🔍 Found meter table")
+                
+                # Look for innov8-VN LTE text and metermname spans
+                innov8_span = None
+                metron_span = None
+                
+                for span in meter_table.find_all('span'):
+                    text = span.get_text(strip=True)
+                    if 'innov8-VN LTE' in text:
+                        innov8_span = span
+                        _LOGGER.info(f"✅ Found innov8 span: '{text}'")
+                    elif span.get('class') == ['metermname']:
+                        metron_span = span
+                        metron_text = span.get_text(strip=True)
+                        _LOGGER.info(f"✅ Found metermname span: '{metron_text}'")
+                
+                # Combine the two parts if both found
+                if innov8_span and metron_span:
+                    innov8_text = innov8_span.get_text(strip=True)
+                    metron_text = metron_span.get_text(strip=True)
+                    # Clean up the metron text (remove extra whitespace and &nbsp;)
+                    metron_text = re.sub(r'\s+', ' ', metron_text).strip()
+                    device_name = f"{innov8_text} {metron_text}"
+                    _LOGGER.info(f"✅ Combined device name: '{device_name}'")
+                    return device_name
+            
+            _LOGGER.warning("❌ Device name extraction failed - no suitable patterns found")
+            return None
+            
+        except Exception as e:
+            _LOGGER.error("Error extracting device name: %s", str(e), exc_info=True)
             return None
     
     async def get_meter_data(self, username: str, password: str) -> Dict[str, Any]:
@@ -1161,10 +1113,10 @@ class WaterscopeAPI:
                 _LOGGER.warning("❌ No current cycle total found in dashboard")
                 result['current_cycle_total'] = None
             
-            # Add device model to the result if extracted
-            if meter_data.get('device_model'):
-                result['device_model'] = meter_data['device_model']
-                _LOGGER.info("✅ Device model extracted: %s", meter_data['device_model'])
+            # Add device name to the result if extracted
+            if meter_data.get('device_name'):
+                result['device_name'] = meter_data['device_name']
+                _LOGGER.info("✅ Device name extracted: %s", meter_data['device_name'])
             
             _LOGGER.info("✅ Dashboard data retrieval successful")
             return result
