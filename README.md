@@ -1,23 +1,15 @@
 # Waterscope Home Assistant Integration
 
-**Pure HTTP authentication system for Waterscope water meter data integration with Home Assistant**
-
 ---
 
 ## Overview
 
-This Home Assistant integration provides access to Waterscope water meter data without requiring browser automation. The implementation uses a reverse-engineered HTTP authentication flow that programmatically extracts session cookies from username/password credentials.
+This Home Assistant integration scrapes water meter data via the Waterscope portal. It's probably pretty flakey, but seems to work for now.
 
 
 ---
 
 ## Installation
-
-### HACS Installation (Recommended)
-
-1. Add this repository to HACS as a custom repository
-2. Install "Waterscope" from HACS
-3. Restart Home Assistant
 
 ### Manual Installation
 
